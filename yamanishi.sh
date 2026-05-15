@@ -1,6 +1,6 @@
 python src/kge_nfm.py \
   --dataset yamanishi_08 \
-  --data_root /kaggle/input/datasets/ngcaovn/kge-dti/data \
+  --data-root /kaggle/input/datasets/ngcaovn/kge-dti/data \
   --split warm_start_1_10 \
   --folds 10 \
   --device auto \

@@ -23,8 +23,7 @@ class DatasetSpec:
     yamanishi_features: bool = False
 
 
-def get_dataset_spec(repo_root: Path, dataset: str, split: str) -> DatasetSpec:
-    data_root = repo_root / "data"
+def get_dataset_spec(data_root: Path, dataset: str, split: str) -> DatasetSpec:
     if dataset == "yamanishi_08":
         root = data_root / dataset
         return DatasetSpec(

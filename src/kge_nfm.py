@@ -134,6 +134,11 @@ def run_fold(
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run KGE_NFM with PyKEEN DistMult and a local PyTorch NFM.")
     parser.add_argument("--dataset", default="yamanishi_08", help="Dataset name: yamanishi_08, BioKG, hetionet.")
+    parser.add_argument(
+        "--data-root",
+        default=None,
+        help="Directory containing dataset folders. Defaults to <repo>/data.",
+    )
     parser.add_argument("--split", default="warm_start_1_10", help="Fold split directory name.")
     parser.add_argument("--folds", type=int, default=10, help="Number of folds to run from fold 0.")
     parser.add_argument("--device", default="auto", help="auto, cpu, cuda, cuda:0, ...")
@@ -161,12 +166,13 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     repo_root = Path(__file__).resolve().parent.parent
+    data_root = Path(args.data_root) if args.data_root is not None else repo_root / "data"
     set_seed(args.seed)
     device = resolve_device(args.device)
     output_root = Path(args.output_dir)
     ensure_output_dirs(output_root)
 
-    spec = get_dataset_spec(repo_root, args.dataset, args.split)
+    spec = get_dataset_spec(data_root, args.dataset, args.split)
     all_dti = load_all_dti(spec)
     kg = load_kg(spec)
     drug_df, protein_df = load_feature_tables(spec, pca_components=args.protein_pca_components)

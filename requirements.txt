@@ -1,6 +1,12 @@
-torch>=2.2
-pykeen>=1.11
-pandas>=2.0,<3
-numpy>=1.24,<2
-scikit-learn>=1.4
-tqdm>=4.66
+
+# CUDA 11.8 PyTorch build available on Kaggle.
+torch==2.7.1
+numpy>=2.0,<3
+
+# Core data/science stack used by src/kge_nfm.py.
+pandas==2.2.2
+scikit-learn>=1.5,<1.8
+tqdm>=4.66,<5
+
+# PyKEEN provides DistMult for the KGE stage.
+pykeen>=1.10,<1.12

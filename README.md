@@ -78,18 +78,22 @@ We provided a pre-trained kge model for example.
 The new `src/kge_nfm_torch.py` path keeps the original KGE_NFM workflow, but replaces the legacy TensorFlow stack with PyTorch libraries. It imports DistMult from PyKEEN and implements the NFM classifier locally in PyTorch.
 ```
 - python >= 3.10
-- torch >= 2.2
-- pykeen >= 1.11
-- pandas >= 2.0
-- numpy >= 1.24
-- scikit-learn >= 1.4
-- tqdm >= 4.66
+- torch == 2.7.1+cu118
+- pykeen >= 1.10, < 1.12
+- pandas == 2.2.2
+- numpy >= 2.0, < 3
+- scikit-learn >= 1.5, < 1.8
+- tqdm >= 4.66, < 5
 ```
 
 Install the modern path with:
 ```
 pip install -r requirements.txt
 ```
+
+Use a clean virtual environment when possible. The default requirements target
+Kaggle's CUDA 11.8 PyTorch wheel and NumPy 2.x, which works better with shared
+notebook images that already include packages requiring NumPy 2.
 
 Smoke test one fold with one epoch for each stage:
 ```

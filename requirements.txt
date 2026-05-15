@@ -1,18 +1,11 @@
 
 --index-url https://download.pytorch.org/whl/cu121
 --extra-index-url https://pypi.org/simple
-
-# CUDA 12.1 PyTorch packages, equivalent to:
-# pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
 torch
 torchvision
 torchaudio
 numpy>=2.0,<3
-
-# Core data/science stack used by src/kge_nfm.py.
 pandas==2.2.2
 scikit-learn>=1.5,<1.8
 tqdm>=4.66,<5
-
-# PyKEEN provides DistMult for the KGE stage.
 pykeen>=1.10,<1.12

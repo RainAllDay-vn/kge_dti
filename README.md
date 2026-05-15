@@ -1,123 +1,83 @@
-## A unified DTI prediction framework based on knowledge graph and recommendation system
+# KGE_NFM
 
-# Code and data description
-## Scripts
-- `kge_nfm.py`: the complement of the KGE_NFM & NFM methods.
-- `kge_rf.py`: the complement of the KGE_RF & RF methods.
-- `deepdit.py`: the complement of the MPNN_CNN & DeepDTI methods.
-- the complement of DTINet and DTiGEMS is tested based on their source packages (more in Prerequisites)
+A drug-target interaction (DTI) prediction repo based on knowledge graph embeddings and a neural factorization machine.
 
+## Current Structure
 
-## `data/` directory
-#### `yamanishi_08/` directory
-- `data_folds/`: 10 folds training set and test set in the three scenarios
-    - `warm_start_1_1/` 
-    - `warm_start_1_10/` 
-    - `drug_coldstart/` 
-    - `protein_coldstart/` 
-- `kg_data/`: supporting knowledge graph data
-- `dt_all_08.csv`: whole DTI dataset
-- `791drug_struc.csv`: drugbank id and smiles of drugs
-- `989proseq.csv`: kegg id and sequences of proteins 
-- `morganfp.txt`: list of drug morgan fingerprints
-- `pro_ctd.txt`: list of protein descriptors
+- `src/kge_nfm.py`: main PyTorch experiment runner.
+- `src/data_utils.py`: dataset paths, fold loading, KG loading, descriptor feature loading.
+- `src/kge.py`: PyKEEN DistMult training, KGE scoring, entity embedding extraction.
+- `src/nfm.py`: local PyTorch NFM model and training loop.
+- `src/metrics_utils.py`: ROC-AUC and PR-AUC helpers.
+- `src/utils.py`: seed, device, output-directory, and argument helpers.
+- `data/`: benchmark datasets and precomputed folds/features.
+- `output/`: experiment outputs.
+- `logs/`: log output directory.
 
-#### `BioKG/` directory
-- `data_folds/`: 10 folds training set and test set in the three scenarios
-    - `warm_start_1_10/` 
-    - `drug_coldstart/` 
-    - `protein_coldstart/` 
-- `kg.csv`: supporting knowledge graph data
-- `dti.csv`: whole DTI dataset
-- `comp_struc.csv`: drugbank id and smiles of drugs
-- `pro_seq.csv`: sequences of proteins 
-- `fp_df.csv`: list of drug morgan fingerprints
-- `prodes_df.csv`: list of protein descriptors
+Legacy root scripts:
 
-#### `hetionet/` directory
-- `data_folds/`: 10 folds training set and test set in the three scenarios
-    - `warm_start_1_10/` 
-    - `drug_coldstart/` 
-    - `protein_coldstart/` 
-- `kg.csv`: supporting knowledge graph data
-- `dti.csv`: whole DTI dataset
-- `map_drugs_df`: drugbank id and smiles of drugs
-- `pro_seq.csv`: sequences of proteins 
-- `fp_df.csv`: list of drug morgan fingerprints
-- `prodes_df.csv`: list of protein descriptors
+- `kge_nfm.py`: original TensorFlow 1 / Ampligraph / DeepCTR implementation.
+- `kge_rf.py`: original RF and KGE_RF baseline.
+- `deepdti.py`: original DeepPurpose baseline.
 
-#### `luo's_dataset/` directory
-- `data_folds/`: 10 folds training set and test set in the three scenarios
-    - `warm_start_1_1/` 
-    - `warm_start_1_10/` 
-    - `drug_coldstart/` 
-    - `protein_coldstart/` 
-- `mapping/`: related mappings and similarity matrix (https://github.com/luoyunan/DTINet) 
-    - `protein.txt`: list of protein names
-    - `disease.txt`: list of disease names
-    - `se.txt`: list of side effect names
-    - `drug_dict_map`: a complete ID mapping between drug names and DrugBank ID
-    - `protein_dict_map`: a complete ID mapping between protein names and UniProt ID
-    - `Similarity_Matrix_Drugs.txt` 	: Drug similarity scores based on chemical structures of drugs
-    - `Similarity_Matrix_Proteins.txt` 	: Protein similarity scores based on primary sequences of proteins
-- `feature/`: related features used in methods
-    - `drug_smiles.csv`: drugbank id and smiles
-    - `seq.txt`: list of protein sequences
-    - `morganfp.txt`: list of drug morgan fingerprints
-    - `pro_ctd.txt`: list of protein descriptors
+## Dependencies
 
-#### `eg_model/` directory
-We provided a pre-trained kge model for example.
-- `dismult_400_warm_1_10.pkl`
+Install the current PyTorch path with:
 
-
-# Prerequisites
-#### Operating system: Linux
-#### Programing language: python
-#### Modern PyTorch KGE_NFM path
-The new `src/kge_nfm_torch.py` path keeps the original KGE_NFM workflow, but replaces the legacy TensorFlow stack with PyTorch libraries. It imports DistMult from PyKEEN and implements the NFM classifier locally in PyTorch.
-```
-- python >= 3.10
-- torch from the CUDA 12.1 PyTorch index
-- torchvision from the CUDA 12.1 PyTorch index
-- torchaudio from the CUDA 12.1 PyTorch index
-- pykeen >= 1.10, < 1.12
-- pandas == 2.2.2
-- numpy >= 2.0, < 3
-- scikit-learn >= 1.5, < 1.8
-- tqdm >= 4.66, < 5
-```
-
-Install the modern path with:
-```
+```bash
 pip install -r requirements.txt
 ```
 
-Use a clean virtual environment when possible. The default requirements install
-Torch, TorchVision, and TorchAudio from the CUDA 12.1 PyTorch wheel index and
-use NumPy 2.x, which works better with shared notebook images that already
-include packages requiring NumPy 2.
+`requirements.txt` currently uses:
 
-Smoke test one fold with one epoch for each stage:
-```
-python src/kge_nfm_torch.py --folds 1 --kge-epochs 1 --nfm-epochs 1 --device auto
-```
+- PyTorch / TorchVision / TorchAudio from the CUDA 12.1 PyTorch wheel index
+- `pykeen >= 1.10, < 1.12`
+- `numpy >= 2.0, < 3`
+- `pandas == 2.2.2`
+- `scikit-learn >= 1.5, < 1.8`
+- `tqdm >= 4.66, < 5`
 
-Default full run:
-```
-python src/kge_nfm_torch.py --dataset yamanishi_08 --split warm_start_1_10 --folds 10 --device auto
-```
+Use Python 3.10+ in a clean virtual environment.
 
-Useful options:
-```
-python src/kge_nfm_torch.py \
+## Data
+
+Supported by the current PyTorch runner:
+
+- `yamanishi_08`
+- `BioKG`
+- `hetionet`
+
+`luo's_dataset` is included in `data/`, but is not enabled in `src/kge_nfm.py` because this checkout does not include a KG triples file for that dataset.
+
+## Run
+
+Smoke test on Yamanishi08:
+
+```bash
+python src/kge_nfm.py \
   --dataset yamanishi_08 \
   --split warm_start_1_10 \
+  --folds 1 \
+  --kge-epochs 1 \
+  --nfm-epochs 1 \
+  --device auto \
+  --no-tqdm
+```
+
+Full Yamanishi08 run:
+
+```bash
+python src/kge_nfm.py \
+  --dataset yamanishi_08 \
+  --split warm_start_1_10 \
+  --folds 10 \
+  --device auto \
   --embedding-dim 400 \
   --kge-epochs 50 \
   --nfm-epochs 2000 \
   --kge-batch-size 1024 \
   --batch-size 20000 \
+  --nfm-sparse-embedding-dim 50 \
   --nfm-lr 0.001 \
   --nfm-weight-decay 0.00001 \
   --nfm-hidden-units 128,128 \
@@ -125,97 +85,37 @@ python src/kge_nfm_torch.py \
   --output-dir output/kge_nfm_torch
 ```
 
-The PyTorch path writes fold-specific artifacts instead of overwriting one model:
-```
+## Outputs
+
+The PyTorch runner writes fold-specific artifacts:
+
+```text
 output/kge_nfm_torch/model/kge_nfm_fold_0.pt
 output/kge_nfm_torch/curve/roc/0.csv
 output/kge_nfm_torch/curve/pr/0.csv
 output/kge_nfm_torch/curve/roc_nfm/0.csv
 output/kge_nfm_torch/curve/pr_nfm/0.csv
+output/kge_nfm_torch/predictions/fold_0.csv
 output/kge_nfm_torch/auc/kge_nfm_torch_auc.csv
 ```
 
-`src/kge_nfm_torch.py` currently supports `yamanishi_08`, `BioKG`, and `hetionet`. `luo's_dataset` is not enabled in the PyTorch runner because this checkout does not include a KG triples file for that dataset.
+Per fold, metrics include:
 
-#### Legacy KGE_NFM & NFM dependencies
-The original `kge_nfm.py`, `kge_rf.py`, and `deepdti.py` scripts are preserved for comparison, but they require the old environment below rather than the modern `requirements.txt`.
-#### KGE_NFM & NFM dependencies
-```
-- python 3.6
-- pandas '1.1.5'
-- numpy '1.18.4'
-- scikit-learn '0.24.1'
-- tensorflow '1.15.0'
-- ampligraph '1.3.2'
-- deepctr '0.8.4'
-```
-#### baseline dependencies
-- RF & KGE_RF (included in KGE_NFM&NFM dependencies)
-- MPNN_CNN & DeepDTI:
-    - source: https://github.com/kexinhuang12345/DeepPurpose 
-    ```
-    - deeppurpose '0.0.9' 
-    - torch '1.6.0+cu101'
-    ```
-- DTINet: 
-    - source: https://github.com/luoyunan/DTINet
-    - note: in this work, we run the DTINet in a python environment, which need Linux system and python2. Importantly, this method requires the [Inductive Matrix Completion](http://bigdata.ices.utexas.edu/software/inductive-matrix-completion/) (IMC) library. More detailed information about the installation of this method could be found in the source code of the DTINet.
-- DTiGEMS: 
-    - source: https://github.com/MahaThafar/DTiGEMSplus
-- TriModel: 
-    - source: http://drugtargets.insight-centre.org/
+- `roc_auc`: standalone DistMult ROC-AUC
+- `pr_auc`: standalone DistMult PR-AUC
+- `roc_auc_nfm`: final NFM ROC-AUC
+- `pr_auc_nfm`: final NFM PR-AUC
 
+## Legacy Environment
 
+The root-level original scripts are preserved, but they require the old stack:
 
-# Example (kge_nfm.py)
+- Python 3.6
+- TensorFlow 1.15
+- Ampligraph 1.3.2
+- DeepCTR 0.8.4
+- pandas 1.1.5
+- numpy 1.18.4
+- scikit-learn 0.24.1
 
-#### A brief presentation of the results:
-- return average loss when training kge model
-```
-Average Loss:   0.475181:   2%|###3                       | 1/50 [01:10<57:31, 70.44s/epoch]
-```
-- return performance(mrr) on training set of DTI for early stopping (kge_model in `eg_model/`)
-```
-In [35]:     roc = roc_auc(test_label,test_score)
-    ...:     pr = pr_auc(test_label,test_score)
-    ...:     print(roc)
-    ...:     print(pr)
-0.8731770833333332
-0.44079654835037246
-```
-
-- nfm training process (`patience=10`)
-
-```
-In [45]: roc_nfm,pr_nfm,pred_y = train_nfm(feature_columns,train_model_input,train_label,test_model_input,test_label,patience)
-Train on 44851 samples
-Epoch 1/2000
-44851/44851 - 2s - loss: 0.5332 - precision: 0.0976
-Epoch 2/2000
-44851/44851 - 1s - loss: 0.4143 - precision: 0.0000e+00
-Epoch 3/2000
-44851/44851 - 1s - loss: 0.3456 - precision: 0.0000e+00
-Epoch 4/2000
-44851/44851 - 1s - loss: 0.3443 - precision: 0.0000e+00
-Epoch 5/2000
-44851/44851 - 1s - loss: 0.3470 - precision: 0.0000e+00
-Epoch 6/2000
-44851/44851 - 1s - loss: 0.3382 - precision: 0.0000e+00
-......
-Epoch 279/2000
-44851/44851 - 1s - loss: 0.0758 - precision: 0.9248
-Epoch 280/2000
-44851/44851 - 1s - loss: 0.0753 - precision: 0.9327
-Epoch 281/2000
-44851/44851 - 1s - loss: 0.0796 - precision: 0.9155
-Epoch 282/2000
-44851/44851 - 1s - loss: 0.0764 - precision: 0.9276
-Epoch 283/2000
-44851/44851 - 1s - loss: 0.0739 - precision: 0.9127
-```
-
-- reutrn results as type of roc_auc & pr_auc
-```
-0.9812476679104477
-0.8803416284646345
-```
+Use the `src/` implementation for new experiments.

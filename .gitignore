@@ -6,3 +6,4 @@ data/*
 *.pt
 *.log
 .DS_Store
+*.json

@@ -1,6 +1,12 @@
 
-# CUDA 11.8 PyTorch build available on Kaggle.
-torch==2.7.1
+--index-url https://download.pytorch.org/whl/cu121
+--extra-index-url https://pypi.org/simple
+
+# CUDA 12.1 PyTorch packages, equivalent to:
+# pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+torch
+torchvision
+torchaudio
 numpy>=2.0,<3
 
 # Core data/science stack used by src/kge_nfm.py.

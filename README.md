@@ -74,6 +74,64 @@ We provided a pre-trained kge model for example.
 # Prerequisites
 #### Operating system: Linux
 #### Programing language: python
+#### Modern PyTorch KGE_NFM path
+The new `src/kge_nfm_torch.py` path keeps the original KGE_NFM workflow, but replaces the legacy TensorFlow stack with PyTorch libraries. It imports DistMult from PyKEEN and implements the NFM classifier locally in PyTorch.
+```
+- python >= 3.10
+- torch >= 2.2
+- pykeen >= 1.11
+- pandas >= 2.0
+- numpy >= 1.24
+- scikit-learn >= 1.4
+- tqdm >= 4.66
+```
+
+Install the modern path with:
+```
+pip install -r requirements.txt
+```
+
+Smoke test one fold with one epoch for each stage:
+```
+python src/kge_nfm_torch.py --folds 1 --kge-epochs 1 --nfm-epochs 1 --device auto
+```
+
+Default full run:
+```
+python src/kge_nfm_torch.py --dataset yamanishi_08 --split warm_start_1_10 --folds 10 --device auto
+```
+
+Useful options:
+```
+python src/kge_nfm_torch.py \
+  --dataset yamanishi_08 \
+  --split warm_start_1_10 \
+  --embedding-dim 400 \
+  --kge-epochs 50 \
+  --nfm-epochs 2000 \
+  --kge-batch-size 1024 \
+  --batch-size 20000 \
+  --nfm-lr 0.001 \
+  --nfm-weight-decay 0.00001 \
+  --nfm-hidden-units 128,128 \
+  --nfm-patience 10 \
+  --output-dir output/kge_nfm_torch
+```
+
+The PyTorch path writes fold-specific artifacts instead of overwriting one model:
+```
+output/kge_nfm_torch/model/kge_nfm_fold_0.pt
+output/kge_nfm_torch/curve/roc/0.csv
+output/kge_nfm_torch/curve/pr/0.csv
+output/kge_nfm_torch/curve/roc_nfm/0.csv
+output/kge_nfm_torch/curve/pr_nfm/0.csv
+output/kge_nfm_torch/auc/kge_nfm_torch_auc.csv
+```
+
+`src/kge_nfm_torch.py` currently supports `yamanishi_08`, `BioKG`, and `hetionet`. `luo's_dataset` is not enabled in the PyTorch runner because this checkout does not include a KG triples file for that dataset.
+
+#### Legacy KGE_NFM & NFM dependencies
+The original `kge_nfm.py`, `kge_rf.py`, and `deepdti.py` scripts are preserved for comparison, but they require the old environment below rather than the modern `requirements.txt`.
 #### KGE_NFM & NFM dependencies
 ```
 - python 3.6

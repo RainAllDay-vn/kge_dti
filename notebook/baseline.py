@@ -22,6 +22,11 @@ with app.setup:
     import numpy as np
     import matplotlib.pyplot as plt
 
+    from sklearn.ensemble import RandomForestClassifier
+    from sklearn import metrics
+
+    random.seed(42)
+
 
 @app.cell(hide_code=True)
 def _():
@@ -558,7 +563,7 @@ def _():
 
     It serves as a benchmark for comparison before introducing graph embedding or deep learning models.
 
-    ## 2.1 Simple Train-Test Split (80/20)
+    ## 2.1 Warm-start Dataset
 
     ### Dataset Reconstruction & Model Input Format
     We construct a balanced or realistically ratioed tabular dataset where **each row in the DataFrame represents a single drug-target pair prediction instance**:
@@ -583,14 +588,13 @@ def _(drug_struc_df, dti_df, pro_seq_df):
     _num_positives = len(_pos_pairs)
     _num_negatives = _num_positives * 9
 
-    random.seed(42)
     _neg_pairs_set = set()
     while len(_neg_pairs_set) < _num_negatives:
-        drug = random.choice(_all_drugs)
-        target = random.choice(_all_targets)
-        pair = (drug, target)
-        if pair not in _pos_pairs and pair not in _neg_pairs_set:
-            _neg_pairs_set.add(pair)
+        _drug = random.choice(_all_drugs)
+        _target = random.choice(_all_targets)
+        _pair = (_drug, _target)
+        if _pair not in _pos_pairs and _pair not in _neg_pairs_set:
+            _neg_pairs_set.add(_pair)
     _neg_pairs = list(_neg_pairs_set)
 
     # 4. Combine into a reconstructed DTI DataFrame
@@ -600,12 +604,12 @@ def _(drug_struc_df, dti_df, pro_seq_df):
     _neg_df = pd.DataFrame(_neg_pairs, columns=["drug_id", "target_id"])
     _neg_df["label"] = 0.0
 
-    data_df = pd.concat([_pos_df, _neg_df], ignore_index=True)
-    return (data_df,)
+    warm_data_df = pd.concat([_pos_df, _neg_df], ignore_index=True)
+    return (warm_data_df,)
 
 
 @app.cell
-def _(data_df, drug_fps, drug_struc_df, pro_ctds, pro_seq_df):
+def _(drug_fps, drug_struc_df, pro_ctds, pro_seq_df, warm_data_df):
     from sklearn.preprocessing import MinMaxScaler
     from sklearn.model_selection import train_test_split
 
@@ -616,17 +620,17 @@ def _(data_df, drug_fps, drug_struc_df, pro_ctds, pro_seq_df):
     # 2. Build feature lookup maps/DataFrames (explicit prefixes to avoid col conflicts)
     _drug_id_series = drug_struc_df["drug_id"]
     _fp_cols = [f"drug_fp_{i}" for i in range(drug_fps.shape[1])]
-    _fp_df = pd.concat([_drug_id_series, pd.DataFrame(drug_fps, columns=_fp_cols)], axis=1)
+    fp_df = pd.concat([_drug_id_series, pd.DataFrame(drug_fps, columns=_fp_cols)], axis=1)
 
     _pro_id_series = pro_seq_df["pro_id"]
     _ctd_cols = [f"pro_ctd_{i}" for i in range(_scaled_pro_ctds.shape[1])]
-    _ctd_df = pd.concat([_pro_id_series, pd.DataFrame(_scaled_pro_ctds, columns=_ctd_cols)], axis=1)
+    ctd_df = pd.concat([_pro_id_series, pd.DataFrame(_scaled_pro_ctds, columns=_ctd_cols)], axis=1)
 
     # 3. Merge features to reconstructed DTI DataFrame
-    _merged_drug = pd.merge(data_df, _fp_df, how="left", on="drug_id")
+    _merged_drug = pd.merge(warm_data_df, fp_df, how="left", on="drug_id")
     _merged_all = pd.merge(
         _merged_drug,
-        _ctd_df,
+        ctd_df,
         how="left",
         left_on="target_id",
         right_on="pro_id",
@@ -637,7 +641,7 @@ def _(data_df, drug_fps, drug_struc_df, pro_ctds, pro_seq_df):
     _y = _merged_all["label"]
 
     # 5. Perform standard stratified 80/20 train-test split
-    X_train, X_test, y_train, y_test = train_test_split(
+    warm_X_train, warm_X_test, warm_y_train, warm_y_test = train_test_split(
         _X, _y, test_size=0.2, random_state=42, stratify=_y
     )
 
@@ -651,58 +655,54 @@ def _(data_df, drug_fps, drug_struc_df, pro_ctds, pro_seq_df):
         mo.md(f"Shape of y: {_y.shape}"),
         mo.md(f"Samples of y (5):"),
         _y.sample(5, random_state=42),
-        mo.md(f"Shape of X_train: {X_train.shape}"),
+        mo.md(f"Shape of X_train: {warm_X_train.shape}"),
         mo.md(f"Samples of X_train (5, showing first/last 6 columns):"),
-        _slice_cols(X_train).sample(5, random_state=42),
-        mo.md(f"Shape of X_test: {X_test.shape}"),
+        _slice_cols(warm_X_train).sample(5, random_state=42),
+        mo.md(f"Shape of X_test: {warm_X_test.shape}"),
         mo.md(f"Samples of X_test (5, showing first/last 6 columns):"),
-        _slice_cols(X_test).sample(5, random_state=42),
-        mo.md(f"Shape of y_train: {y_train.shape}"),
+        _slice_cols(warm_X_test).sample(5, random_state=42),
+        mo.md(f"Shape of y_train: {warm_y_train.shape}"),
         mo.md(f"Distribution of y_train:"),
-        y_train.value_counts(normalize=True),
-        mo.md(f"Shape of y_test: {y_test.shape}"),
+        warm_y_train.value_counts(normalize=True),
+        mo.md(f"Shape of y_test: {warm_y_test.shape}"),
         mo.md(f"Distribution of y_test:"),
-        y_test.value_counts(normalize=True),
+        warm_y_test.value_counts(normalize=True),
     ])
-    return X_test, X_train, y_test, y_train
+    return ctd_df, fp_df, warm_X_test, warm_X_train, warm_y_test, warm_y_train
 
 
 @app.cell
-def _(X_train, y_train):
-    from sklearn.ensemble import RandomForestClassifier
-
+def _(warm_X_train, warm_y_train):
     # 1. Initialize and train the Random Forest Classifier
-    random_forest_clf = RandomForestClassifier(
+    warm_random_forest_clf = RandomForestClassifier(
         n_estimators=200,
         criterion='entropy',
         class_weight='balanced',
         random_state=42,
         n_jobs=-1
     )
-    random_forest_clf.fit(X_train, y_train)
+    warm_random_forest_clf.fit(warm_X_train, warm_y_train)
 
     mo.md("")
-    return (random_forest_clf,)
+    return (warm_random_forest_clf,)
 
 
 @app.cell
-def _(X_test, random_forest_clf, y_test):
-    from sklearn import metrics
-
+def _(warm_X_test, warm_random_forest_clf, warm_y_test):
     # 2. Predict probabilities on the test set
-    _y_pred_proba = random_forest_clf.predict_proba(X_test)[:, 1]
+    _y_pred_proba = warm_random_forest_clf.predict_proba(warm_X_test)[:, 1]
 
     # 3. Calculate ROC-AUC and PR-AUC
-    _fpr, _tpr, _ = metrics.roc_curve(y_test, _y_pred_proba)
-    _roc_auc = metrics.auc(_fpr, _tpr)
+    _fpr, _tpr, _ = metrics.roc_curve(warm_y_test, _y_pred_proba)
+    warm_roc_auc = metrics.auc(_fpr, _tpr)
 
-    _precision, _recall, _ = metrics.precision_recall_curve(y_test, _y_pred_proba)
-    _pr_auc = metrics.auc(_recall, _precision)
+    _precision, _recall, _ = metrics.precision_recall_curve(warm_y_test, _y_pred_proba)
+    warm_pr_auc = metrics.auc(_recall, _precision)
 
     # 4. Display results
     _stats_df = pd.DataFrame({
         "Metric": ["ROC-AUC", "Precision-Recall AUC (PR-AUC)"],
-        "Value": [f"{_roc_auc:.4f}", f"{_pr_auc:.4f}"]
+        "Value": [f"{warm_roc_auc:.4f}", f"{warm_pr_auc:.4f}"]
     })
 
     # Sleek dark/modern theme styling for matplotlib
@@ -718,7 +718,7 @@ def _(X_test, random_forest_clf, y_test):
     _fig, _axes = plt.subplots(1, 2, figsize=(12, 5))
 
     # 1. Plot ROC Curve
-    _axes[0].plot(_fpr, _tpr, color="#8b5cf6", lw=2.5, label=f"ROC Curve (AUC = {_roc_auc:.4f})")
+    _axes[0].plot(_fpr, _tpr, color="#8b5cf6", lw=2.5, label=f"ROC Curve (AUC = {warm_roc_auc:.4f})")
     _axes[0].plot([0, 1], [0, 1], color="#94A3B8", linestyle="--", alpha=0.5)
     _axes[0].set_xlim([0.0, 1.0])
     _axes[0].set_ylim([0.0, 1.05])
@@ -729,7 +729,7 @@ def _(X_test, random_forest_clf, y_test):
     _axes[0].grid(True, linestyle="--", alpha=0.3)
 
     # 2. Plot Precision-Recall Curve
-    _axes[1].plot(_recall, _precision, color="#d946ef", lw=2.5, label=f"PR Curve (AUC = {_pr_auc:.4f})")
+    _axes[1].plot(_recall, _precision, color="#d946ef", lw=2.5, label=f"PR Curve (AUC = {warm_pr_auc:.4f})")
     _axes[1].set_xlim([0.0, 1.0])
     _axes[1].set_ylim([0.0, 1.05])
     _axes[1].set_xlabel("Recall", fontsize=10)
@@ -745,11 +745,11 @@ def _(X_test, random_forest_clf, y_test):
     # Result Summary
     _result_summary = mo.md(
         f"""
-        #### **Result Interpretation & Validation Observations**
+        ### Result Interpretation & Validation Observations
 
         1. **Outstanding Baseline Performance**:
-            *   **ROC-AUC ($0.9448$):** Demonstrates excellent discriminative ability between interacting and non-interacting drug-target pairs across all classification thresholds.
-            *   **PR-AUC ($0.8091$):** Since the dataset is highly imbalanced ($1:9$ positive-to-negative ratio), the Precision-Recall AUC is a much more robust and honest indicator of performance. Achieving an $0.8091$ PR-AUC indicates the model maintains high precision (low false-positive rate) even at high recall thresholds.
+            *   **ROC-AUC (${warm_roc_auc:.4f}$):** Demonstrates excellent discriminative ability between interacting and non-interacting drug-target pairs across all classification thresholds.
+            *   **PR-AUC (${warm_pr_auc:.4f}$):** Since the dataset is highly imbalanced ($1:9$ positive-to-negative ratio), the Precision-Recall AUC is a much more robust and honest indicator of performance. Achieving an ${warm_pr_auc:.4f}$ PR-AUC indicates the model maintains high precision (low false-positive rate) even at high recall thresholds.
 
         2. **Why is the baseline so strong?**
             *   **Highly Informative Features:** Circular Morgan fingerprints represent local chemical neighborhoods that directly dictate binding affinity, while 147-dimensional CTD descriptors represent global physical/chemical signatures of target proteins.
@@ -758,10 +758,417 @@ def _(X_test, random_forest_clf, y_test):
     )
 
     mo.vstack([
-        mo.md("### 2.1.1 Random Forest Baseline Metrics"),
+        mo.md("### Random Forest Baseline Metrics"),
         _stats_df,
         _plot_ui,
         _result_summary,
+    ])
+    return warm_pr_auc, warm_roc_auc
+
+
+@app.cell
+def _():
+    mo.md(r"""
+    ## 2.2 Drug Cold-Start (Unseen Drugs)
+
+    In the **Drug Cold-Start** setting, we evaluate the baseline model's ability to extrapolate to entirely novel chemical compounds that were not present in the training set.
+
+    This simulates the real-world scenario of screening a newly developed compound library against a set of known target proteins. To achieve a true cold-start partition, we split our unique drug compounds into **80% training drugs** and **20% testing drugs**, ensuring their sets are completely disjoint. Negative pairs are programmatically sampled (1:9 ratio) within each drug set to avoid any information leakage.
+    """)
+    return
+
+
+@app.cell
+def _(ctd_df, drug_struc_df, dti_df, fp_df, pro_seq_df):
+    # 1. Split unique drug compounds (80/20)
+    _all_drugs = list(drug_struc_df["drug_id"].unique())
+    _all_targets = list(pro_seq_df["pro_id"].unique())
+
+    _shuffled_drugs = list(_all_drugs)
+    random.shuffle(_shuffled_drugs)
+    _split_idx = int(len(_shuffled_drugs) * 0.8)
+    _train_drugs = set(_shuffled_drugs[:_split_idx])
+    _test_drugs = set(_shuffled_drugs[_split_idx:])
+
+    _pos_pairs = set(zip(dti_df["drug_id"], dti_df["target_id"]))
+    _train_pos = [p for p in _pos_pairs if p[0] in _train_drugs]
+    _test_pos = [p for p in _pos_pairs if p[0] in _test_drugs]
+
+    # 2. Sample disjoint negatives (1:9 ratio)
+    _num_train_neg = len(_train_pos) * 9
+    _train_neg_set = set()
+    while len(_train_neg_set) < _num_train_neg:
+        _drug = random.choice(list(_train_drugs))
+        _target = random.choice(_all_targets)
+        _pair = (_drug, _target)
+        if _pair not in _pos_pairs and _pair not in _train_neg_set:
+            _train_neg_set.add(_pair)
+
+    _num_test_neg = len(_test_pos) * 9
+    _test_neg_set = set()
+    while len(_test_neg_set) < _num_test_neg:
+        _drug = random.choice(list(_test_drugs))
+        _target = random.choice(_all_targets)
+        _pair = (_drug, _target)
+        if _pair not in _pos_pairs and _pair not in _test_neg_set:
+            _test_neg_set.add(_pair)
+
+    # 3. Combine DataFrames
+    _train_pos_df = pd.DataFrame(_train_pos, columns=["drug_id", "target_id"])
+    _train_pos_df["label"] = 1.0
+    _train_neg_df = pd.DataFrame(list(_train_neg_set), columns=["drug_id", "target_id"])
+    _train_neg_df["label"] = 0.0
+    _train_drug_df = pd.concat([_train_pos_df, _train_neg_df], ignore_index=True)
+
+    _test_pos_df = pd.DataFrame(_test_pos, columns=["drug_id", "target_id"])
+    _test_pos_df["label"] = 1.0
+    _test_neg_df = pd.DataFrame(list(_test_neg_set), columns=["drug_id", "target_id"])
+    _test_neg_df["label"] = 0.0
+    _test_drug_df = pd.concat([_test_pos_df, _test_neg_df], ignore_index=True)
+
+    # 4. Extract features
+    def _prepare_features(df):
+        _merged = pd.merge(df, fp_df, how="left", on="drug_id")
+        _merged = pd.merge(_merged, ctd_df, how="left", left_on="target_id", right_on="pro_id")
+        _X = _merged.drop(columns=["drug_id", "target_id", "label", "pro_id"])
+        _y = _merged["label"]
+        return _X, _y
+
+    cold_drug_X_train, cold_drug_y_train = _prepare_features(_train_drug_df)
+    cold_drug_X_test, cold_drug_y_test = _prepare_features(_test_drug_df)
+    return (
+        cold_drug_X_test,
+        cold_drug_X_train,
+        cold_drug_y_test,
+        cold_drug_y_train,
+    )
+
+
+@app.cell
+def _(cold_drug_X_train, cold_drug_y_train):
+    # 1. Train the baseline model on Train Drugs
+    cold_drug_random_forest_clf = RandomForestClassifier(
+        n_estimators=200,
+        criterion="entropy",
+        class_weight="balanced",
+        random_state=42,
+        n_jobs=-1,
+    )
+    cold_drug_random_forest_clf.fit(cold_drug_X_train, cold_drug_y_train)
+    mo.md('')
+    return (cold_drug_random_forest_clf,)
+
+
+@app.cell
+def _(cold_drug_X_test, cold_drug_random_forest_clf, cold_drug_y_test):
+    _y_pred_proba = cold_drug_random_forest_clf.predict_proba(cold_drug_X_test)[:, 1]
+
+    # 2. Compute evaluation curves and AUCs
+    _cold_drug_fpr, _cold_drug_tpr, _ = metrics.roc_curve(cold_drug_y_test, _y_pred_proba)
+    cold_drug_roc_auc = metrics.auc(_cold_drug_fpr, _cold_drug_tpr)
+
+    _cold_drug_precision, _cold_drug_recall, _ = metrics.precision_recall_curve(cold_drug_y_test, _y_pred_proba)
+    cold_drug_pr_auc = metrics.auc(_cold_drug_recall, _cold_drug_precision)
+
+    _metrics_df = pd.DataFrame({
+        "Metric": ["ROC-AUC", "Precision-Recall AUC (PR-AUC)"],
+        "Value": [f"{cold_drug_roc_auc:.4f}", f"{cold_drug_pr_auc:.4f}"]
+    })
+
+    # Sleek dark/modern theme styling for matplotlib
+    plt.rcParams["figure.facecolor"] = "none"
+    plt.rcParams["axes.facecolor"] = "none"
+    plt.rcParams["text.color"] = "#E2E8F0"
+    plt.rcParams["axes.labelcolor"] = "#94A3B8"
+    plt.rcParams["xtick.color"] = "#94A3B8"
+    plt.rcParams["ytick.color"] = "#94A3B8"
+    plt.rcParams["grid.color"] = "#334155"
+    plt.rcParams["axes.edgecolor"] = "#475569"
+
+    _fig, _axes = plt.subplots(1, 2, figsize=(12, 5))
+
+    # 1. Plot Drug ROC Curve
+    _axes[0].plot(_cold_drug_fpr, _cold_drug_tpr, color="#f59e0b", lw=2.5, label=f"ROC Curve (AUC = {cold_drug_roc_auc:.4f})")
+    _axes[0].plot([0, 1], [0, 1], color="#94A3B8", linestyle="--", alpha=0.5)
+    _axes[0].set_xlim([0.0, 1.0])
+    _axes[0].set_ylim([0.0, 1.05])
+    _axes[0].set_xlabel("False Positive Rate (FPR)", fontsize=10)
+    _axes[0].set_ylabel("True Positive Rate (TPR)", fontsize=10)
+    _axes[0].set_title("Drug Cold-Start ROC Curve", fontsize=11, fontweight="bold", pad=12, color="#F1F5F9")
+    _axes[0].legend(loc="lower right", facecolor="#1e293b", edgecolor="#475569")
+    _axes[0].grid(True, linestyle="--", alpha=0.3)
+
+    # 2. Plot Drug Precision-Recall Curve
+    _axes[1].plot(_cold_drug_recall, _cold_drug_precision, color="#f59e0b", lw=2.5, label=f"PR Curve (AUC = {cold_drug_pr_auc:.4f})")
+    _axes[1].set_xlim([0.0, 1.0])
+    _axes[1].set_ylim([0.0, 1.05])
+    _axes[1].set_xlabel("Recall", fontsize=10)
+    _axes[1].set_ylabel("Precision", fontsize=10)
+    _axes[1].set_title("Drug Cold-Start PR Curve", fontsize=11, fontweight="bold", pad=12, color="#F1F5F9")
+    _axes[1].legend(loc="lower left", facecolor="#1e293b", edgecolor="#475569")
+    _axes[1].grid(True, linestyle="--", alpha=0.3)
+
+    plt.tight_layout()
+    _plot_ui = mo.as_html(_fig)
+    plt.close(_fig)
+
+    # Result Summary
+    _result_summary = mo.md(
+        f"""
+        ### Result Interpretation & Validation Observations
+
+        1. **Drug Cold-Start Performance**:
+            *   **ROC-AUC (${cold_drug_roc_auc:.4f}$):** The model retains reasonable rank-ordering ability on unseen drugs, but drops **~5.6 percentage points** from the warm-start ($0.9448$). This tells us that Morgan fingerprints do capture some transferable chemical signal — the model is not guessing randomly — but its discriminative power degrades meaningfully when it can no longer rely on having seen a drug in any prior pair.
+            *   **PR-AUC (${cold_drug_pr_auc:.4f}$):** This is the more revealing metric. A **~27.5 percentage point collapse** from the warm-start ($0.8091$) indicates the model generates many false positives for novel compounds. At high recall, precision deteriorates sharply (as visible in the PR curve), reflecting that the classifier has not truly learnt generalised structure-activity patterns — it has partially memorised drug-specific signals.
+
+        2. **What the gap tells us**:
+            *   **Fingerprint Memorisation vs. Generalisation:** Morgan fingerprints encode local circular substructures. While structurally similar scaffolds share substructure bits, truly novel drugs with unseen scaffolds produce out-of-distribution fingerprint vectors the Random Forest has never split on — leading to poor calibrated probability estimates.
+            *   **Implication for KGE:** This strong performance drop is precisely the motivation for incorporating **Knowledge Graph Embeddings**. KGE models learn latent relational structure over the drug–protein–pathway graph, which may encode a more transferable and context-aware representation for novel entities than feature-based fingerprints alone.
+        """
+    )
+
+    mo.vstack([
+        mo.md("### Drug Cold-Start Baseline Metrics"),
+        _metrics_df,
+        _plot_ui,
+        _result_summary,
+    ])
+    return cold_drug_pr_auc, cold_drug_roc_auc
+
+
+@app.cell
+def _():
+    mo.md(r"""
+    ## 2.3 Protein Cold-Start (Unseen Proteins)
+
+    In the **Protein Cold-Start** setting, we evaluate the baseline model's ability to extrapolate to entirely novel target proteins that were not present in the training set.
+
+    This simulates the real-world scenario of predicting candidate compounds for a newly characterized biological receptor or disease target protein. We partition our unique target proteins into **80% training proteins** and **20% testing proteins**. Negative pairs are programmatically sampled (1:9 ratio) within each protein target partition to prevent information leakage.
+    """)
+    return
+
+
+@app.cell
+def _(ctd_df, drug_struc_df, dti_df, fp_df, pro_seq_df):
+    # 1. Split unique target proteins (80/20)
+    _all_drugs = list(drug_struc_df["drug_id"].unique())
+    _all_targets = list(pro_seq_df["pro_id"].unique())
+
+    _shuffled_targets = list(_all_targets)
+    random.shuffle(_shuffled_targets)
+    _split_idx_pro = int(len(_shuffled_targets) * 0.8)
+    _train_targets = set(_shuffled_targets[:_split_idx_pro])
+    _test_targets = set(_shuffled_targets[_split_idx_pro:])
+
+    _pos_pairs = set(zip(dti_df["drug_id"], dti_df["target_id"]))
+    _train_pos_pro = [p for p in _pos_pairs if p[1] in _train_targets]
+    _test_pos_pro = [p for p in _pos_pairs if p[1] in _test_targets]
+
+    # 2. Sample disjoint negatives (1:9 ratio)
+    _num_train_neg_pro = len(_train_pos_pro) * 9
+    _train_neg_set_pro = set()
+    while len(_train_neg_set_pro) < _num_train_neg_pro:
+        _drug = random.choice(_all_drugs)
+        _target = random.choice(list(_train_targets))
+        _pair = (_drug, _target)
+        if _pair not in _pos_pairs and _pair not in _train_neg_set_pro:
+            _train_neg_set_pro.add(_pair)
+
+    _num_test_neg_pro = len(_test_pos_pro) * 9
+    _test_neg_set_pro = set()
+    while len(_test_neg_set_pro) < _num_test_neg_pro:
+        _drug = random.choice(_all_drugs)
+        _target = random.choice(list(_test_targets))
+        _pair = (_drug, _target)
+        if _pair not in _pos_pairs and _pair not in _test_neg_set_pro:
+            _test_neg_set_pro.add(_pair)
+
+    # 3. Combine DataFrames
+    _train_pos_pro_df = pd.DataFrame(_train_pos_pro, columns=["drug_id", "target_id"])
+    _train_pos_pro_df["label"] = 1.0
+    _train_neg_pro_df = pd.DataFrame(list(_train_neg_set_pro), columns=["drug_id", "target_id"])
+    _train_neg_pro_df["label"] = 0.0
+    _train_pro_df = pd.concat([_train_pos_pro_df, _train_neg_pro_df], ignore_index=True)
+
+    _test_pos_pro_df = pd.DataFrame(_test_pos_pro, columns=["drug_id", "target_id"])
+    _test_pos_pro_df["label"] = 1.0
+    _test_neg_pro_df = pd.DataFrame(list(_test_neg_set_pro), columns=["drug_id", "target_id"])
+    _test_neg_pro_df["label"] = 0.0
+    _test_pro_df = pd.concat([_test_pos_pro_df, _test_neg_pro_df], ignore_index=True)
+
+    # 4. Extract features
+    def _prepare_features(df):
+        _merged = pd.merge(df, fp_df, how="left", on="drug_id")
+        _merged = pd.merge(_merged, ctd_df, how="left", left_on="target_id", right_on="pro_id")
+        _X = _merged.drop(columns=["drug_id", "target_id", "label", "pro_id"])
+        _y = _merged["label"]
+        return _X, _y
+
+    cold_protein_X_train, cold_protein_y_train = _prepare_features(_train_pro_df)
+    cold_protein_X_test, cold_protein_y_test = _prepare_features(_test_pro_df)
+    return (
+        cold_protein_X_test,
+        cold_protein_X_train,
+        cold_protein_y_test,
+        cold_protein_y_train,
+    )
+
+
+@app.cell
+def _(cold_protein_X_train, cold_protein_y_train):
+    # 1. Train the baseline model on Train Proteins
+    cold_protein_random_forest_clf = RandomForestClassifier(
+        n_estimators=200,
+        criterion="entropy",
+        class_weight="balanced",
+        random_state=42,
+        n_jobs=-1,
+    )
+    cold_protein_random_forest_clf.fit(cold_protein_X_train, cold_protein_y_train)
+    mo.md('')
+    return (cold_protein_random_forest_clf,)
+
+
+@app.cell
+def _(
+    cold_protein_X_test,
+    cold_protein_random_forest_clf,
+    cold_protein_y_test,
+):
+    _y_pred_proba = cold_protein_random_forest_clf.predict_proba(cold_protein_X_test)[:, 1]
+
+    # 2. Compute evaluation curves and AUCs
+    _cold_protein_fpr, _cold_protein_tpr, _ = metrics.roc_curve(cold_protein_y_test, _y_pred_proba)
+    cold_protein_roc_auc = metrics.auc(_cold_protein_fpr, _cold_protein_tpr)
+
+    _cold_protein_precision, _cold_protein_recall, _ = metrics.precision_recall_curve(cold_protein_y_test, _y_pred_proba)
+    cold_protein_pr_auc = metrics.auc(_cold_protein_recall, _cold_protein_precision)
+
+    # Comparison metrics table for protein cold start
+    _metrics_df = pd.DataFrame({
+        "Metric": ["ROC-AUC", "Precision-Recall AUC (PR-AUC)"],
+        "Value": [f"{cold_protein_roc_auc:.4f}", f"{cold_protein_pr_auc:.4f}"]
+    })
+
+    # Sleek dark/modern theme styling for matplotlib
+    plt.rcParams["figure.facecolor"] = "none"
+    plt.rcParams["axes.facecolor"] = "none"
+    plt.rcParams["text.color"] = "#E2E8F0"
+    plt.rcParams["axes.labelcolor"] = "#94A3B8"
+    plt.rcParams["xtick.color"] = "#94A3B8"
+    plt.rcParams["ytick.color"] = "#94A3B8"
+    plt.rcParams["grid.color"] = "#334155"
+    plt.rcParams["axes.edgecolor"] = "#475569"
+
+    _fig, _axes = plt.subplots(1, 2, figsize=(12, 5))
+
+    # 1. Plot Protein ROC Curve
+    _axes[0].plot(_cold_protein_fpr, _cold_protein_tpr, color="#10b981", lw=2.5, label=f"ROC Curve (AUC = {cold_protein_roc_auc:.4f})")
+    _axes[0].plot([0, 1], [0, 1], color="#94A3B8", linestyle="--", alpha=0.5)
+    _axes[0].set_xlim([0.0, 1.0])
+    _axes[0].set_ylim([0.0, 1.05])
+    _axes[0].set_xlabel("False Positive Rate (FPR)", fontsize=10)
+    _axes[0].set_ylabel("True Positive Rate (TPR)", fontsize=10)
+    _axes[0].set_title("Protein Cold-Start ROC Curve", fontsize=11, fontweight="bold", pad=12, color="#F1F5F9")
+    _axes[0].legend(loc="lower right", facecolor="#1e293b", edgecolor="#475569")
+    _axes[0].grid(True, linestyle="--", alpha=0.3)
+
+    # 2. Plot Protein Precision-Recall Curve
+    _axes[1].plot(_cold_protein_recall, _cold_protein_precision, color="#10b981", lw=2.5, label=f"PR Curve (AUC = {cold_protein_pr_auc:.4f})")
+    _axes[1].set_xlim([0.0, 1.0])
+    _axes[1].set_ylim([0.0, 1.05])
+    _axes[1].set_xlabel("Recall", fontsize=10)
+    _axes[1].set_ylabel("Precision", fontsize=10)
+    _axes[1].set_title("Protein Cold-Start PR Curve", fontsize=11, fontweight="bold", pad=12, color="#F1F5F9")
+    _axes[1].legend(loc="lower left", facecolor="#1e293b", edgecolor="#475569")
+    _axes[1].grid(True, linestyle="--", alpha=0.3)
+
+    plt.tight_layout()
+    _plot_ui = mo.as_html(_fig)
+    plt.close(_fig)
+
+    # Result Summary
+    _result_summary = mo.md(
+        f"""
+        ### Result Interpretation & Validation Observations
+
+        1. **Protein Cold-Start Performance**:
+            *   **ROC-AUC (${cold_protein_roc_auc:.4f}$):** Only a **~4.4 percentage point** drop from the warm-start ($0.9448$). The model retains strong rank-ordering ability on entirely unseen proteins — a much shallower decline than what was observed for unseen drugs ($0.8389$).
+            *   **PR-AUC (${cold_protein_pr_auc:.4f}$):** A modest **~7.9 percentage point** decline from the warm-start ($0.8091$). The PR curve remains healthy well into mid-recall before degrading, suggesting the model largely maintains precision when ranking novel targets. This is substantially better than drug cold-start ($0.5338$).
+
+        2. **A surprising result — proteins generalise better than drugs**:
+            *   **CTD Descriptor Transferability:** 147-dimensional CTD descriptors (composition, transition, distribution over amino acid physicochemical groups) capture global sequence-level physicochemical signatures that are relatively stable across protein families. Even novel proteins share similar bulk properties with training targets, making CTD vectors more transferable than one might expect.
+            *   **Morgan Fingerprint Sensitivity:** In contrast, Morgan fingerprints are highly sensitive to local substructure. Novel drug scaffolds produce out-of-distribution bit vectors with little overlap to training compounds, causing the sharper cold-start collapse observed in Section 2.2.
+            *   **Biological implication:** Target proteins in DTI datasets tend to cluster into a small number of families (kinases, GPCRs, ion channels, etc.), so unseen proteins often remain within the same functional and structural neighbourhood as training proteins. Drug chemical space is far more diverse and structurally discontinuous.
+        """
+    )
+
+    mo.vstack([
+        mo.md("### Protein Cold-Start Baseline Metrics"),
+        _metrics_df,
+        _plot_ui,
+        _result_summary,
+    ])
+    return cold_protein_pr_auc, cold_protein_roc_auc
+
+
+@app.cell
+def _():
+    mo.md(r"""
+    ## 2.4 Summary
+    """)
+    return
+
+
+@app.cell
+def _(
+    cold_drug_pr_auc,
+    cold_drug_roc_auc,
+    cold_protein_pr_auc,
+    cold_protein_roc_auc,
+    warm_pr_auc,
+    warm_roc_auc,
+):
+    _comparison_df = pd.DataFrame({
+        "Evaluation Setting": [
+            "Warm-Start (80/20 Bipartite Split)",
+            "Cold-Start (Unseen Drugs)",
+            "Cold-Start (Unseen Proteins)",
+        ],
+        "ROC-AUC": [f"{warm_roc_auc:.4f}", f"{cold_drug_roc_auc:.4f}", f"{cold_protein_roc_auc:.4f}"],
+        "PR-AUC":  [f"{warm_pr_auc:.4f}", f"{cold_drug_pr_auc:.4f}", f"{cold_protein_pr_auc:.4f}"],
+        "ROC-AUC Drop (vs. Warm)": ["—", f"−{(warm_roc_auc - cold_drug_roc_auc)*100:.2f} pp", f"−{(warm_roc_auc - cold_protein_roc_auc)*100:.2f} pp"],
+        "PR-AUC Drop (vs. Warm)":  ["—", f"−{(warm_pr_auc - cold_drug_pr_auc)*100:.2f} pp", f"−{(warm_pr_auc - cold_protein_pr_auc)*100:.2f} pp"],
+    })
+
+    _summary = mo.md(r"""
+    ### Baseline Generalisation Analysis
+
+    The three evaluation settings reveal a clear and informative performance gradient:
+
+    | Setting | ROC-AUC | PR-AUC |
+    |---|---|---|
+    | Warm-Start | 0.9448 | 0.8091 |
+    | Drug Cold-Start | 0.8389 | 0.5338 |
+    | Protein Cold-Start | 0.9005 | 0.7296 |
+
+    **1. Warm-Start inflates performance through pair-level memorisation.**
+    In the standard 80/20 bipartite split, both drugs and proteins in the test set were seen in training — just in different pairings. The Random Forest can exploit drug- and protein-specific signals it has memorised, producing an optimistic but unrealistic estimate of real-world performance.
+
+    **2. Drug cold-start causes the sharpest collapse (PR-AUC: 0.8091 → 0.5338, −27.5 pp).**
+    Morgan fingerprints are highly sensitive to local chemical substructure. Novel drug scaffolds produce out-of-distribution bit-vectors with little overlap to training compounds, causing the model's calibrated probability estimates to degrade severely. At high recall, precision drops sharply — the model effectively guesses for structurally distant compounds.
+
+    **3. Protein cold-start is surprisingly robust (PR-AUC: 0.8091 → 0.7296, −8.0 pp).**
+    Despite predicting against entirely unseen proteins, the model retains strong precision well into mid-recall. CTD descriptors capture coarse global physicochemical properties (composition, transition, distribution) that are relatively conserved within protein families. Since DTI target proteins cluster tightly into a small number of families (kinases, GPCRs, ion channels), novel test proteins remain structurally and functionally close to training targets — making CTD vectors more transferable than Morgan fingerprints are across drug chemical space.
+
+    **4. Implication: drug identity is the harder generalisation axis.**
+    For this baseline, the primary bottleneck is chemical novelty, not biological novelty. This motivates the use of **Knowledge Graph Embeddings**, which can propagate structural and functional context through drug–protein–pathway relational edges, potentially providing a richer and more transferable signal for unseen drugs than fingerprints alone.
+    """)
+
+    mo.vstack([
+        mo.md("### Cross-Setting Performance Comparison"),
+        _comparison_df,
+        _summary,
     ])
     return
 

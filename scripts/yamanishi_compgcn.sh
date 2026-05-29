@@ -19,8 +19,8 @@ python src/kge_nfm.py \
   --device auto \
   --kge-model compgcn \
   --embedding-dim 400 \
-  --kge-epochs 10 \
-  --kge-batch-size 4096 \
+  --kge-epochs 50 \
+  --kge-batch-size 8192 \
   --kge-num-negs 1 \
   --compgcn-layers 2 \
   --compgcn-dropout 0.1 \

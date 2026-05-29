@@ -6,7 +6,7 @@ A drug-target interaction (DTI) prediction repo based on knowledge graph embeddi
 
 - `src/kge_nfm.py`: main PyTorch experiment runner.
 - `src/data_utils.py`: dataset paths, fold loading, KG loading, descriptor feature loading.
-- `src/kge.py`: PyKEEN DistMult training, KGE scoring, entity embedding extraction.
+- `src/kge.py`: PyKEEN DistMult/CompGCN training, KGE scoring, entity embedding extraction.
 - `src/nfm.py`: local PyTorch NFM model and training loop.
 - `src/metrics_utils.py`: ROC-AUC and PR-AUC helpers.
 - `src/utils.py`: seed, device, output-directory, and argument helpers.
@@ -85,6 +85,26 @@ python src/kge_nfm.py \
   --output-dir output/kge_nfm_torch
 ```
 
+CompGCN run:
+
+```bash
+python src/kge_nfm.py \
+  --dataset yamanishi_08 \
+  --split warm_start_1_10 \
+  --folds 10 \
+  --device auto \
+  --kge-model compgcn \
+  --compgcn-layers 2 \
+  --compgcn-dropout 0.1 \
+  --compgcn-composition mult \
+  --embedding-dim 400 \
+  --kge-epochs 50 \
+  --nfm-epochs 2000 \
+  --no-tqdm
+```
+
+`--compgcn-composition` accepts the paper's three entity-relation composition families: `sub`, `mult`, and `corr`.
+
 ## Outputs
 
 The PyTorch runner writes fold-specific artifacts:
@@ -101,8 +121,8 @@ output/kge_nfm_torch/auc/kge_nfm_torch_auc.csv
 
 Per fold, metrics include:
 
-- `roc_auc`: standalone DistMult ROC-AUC
-- `pr_auc`: standalone DistMult PR-AUC
+- `roc_auc`: standalone KGE ROC-AUC
+- `pr_auc`: standalone KGE PR-AUC
 - `roc_auc_nfm`: final NFM ROC-AUC
 - `pr_auc_nfm`: final NFM PR-AUC
 

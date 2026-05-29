@@ -21,7 +21,7 @@ from data_utils import (
     load_kg,
     merge_features,
 )
-from kge import pair_embeddings, require_entities, score_triples, train_distmult
+from kge import pair_embeddings, require_entities, score_triples, train_compgcn, train_distmult
 from metrics_utils import pr_auc, roc_auc
 from nfm import train_nfm
 from utils import ensure_output_dirs, parse_hidden_units, resolve_device, set_seed
@@ -38,13 +38,13 @@ def run_fold(
     tail_encoder: dict[str, int],
     device: str,
 ) -> dict[str, float]:
-    print(f"Fold {fold}")
+    print(f"Fold {fold} ({args.kge_model})")
     train, test = load_fold(spec, fold)
     train_pos = train.loc[train["label"] == 1, TRIPLE_COLUMNS]
     kge_train = pd.concat([train_pos, kg], ignore_index=True)[TRIPLE_COLUMNS].astype(str)
 
-    kge_model, triples_factory, losses = train_distmult(
-        kge_train,
+    kge_kwargs = dict(
+        train_triples=kge_train,
         device=device,
         embedding_dim=args.embedding_dim,
         epochs=args.kge_epochs,
@@ -54,6 +54,15 @@ def run_fold(
         num_negs_per_pos=args.kge_num_negs,
         use_tqdm=not args.no_tqdm,
     )
+    if args.kge_model == "compgcn":
+        kge_model, triples_factory, losses = train_compgcn(
+            **kge_kwargs,
+            num_layers=args.compgcn_layers,
+            layer_dropout=args.compgcn_dropout,
+            composition=args.compgcn_composition,
+        )
+    else:
+        kge_model, triples_factory, losses = train_distmult(**kge_kwargs)
 
     require_entities(triples_factory, train["head"].tolist() + train["tail"].tolist(), "Training fold")
     require_entities(triples_factory, test["head"].tolist() + test["tail"].tolist(), "Test fold")
@@ -132,7 +141,7 @@ def run_fold(
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Run KGE_NFM with PyKEEN DistMult and a local PyTorch NFM.")
+    parser = argparse.ArgumentParser(description="Run KGE_NFM with a PyKEEN KGE model and a local PyTorch NFM.")
     parser.add_argument("--dataset", default="yamanishi_08", help="Dataset name: yamanishi_08, BioKG, hetionet.")
     parser.add_argument(
         "--data-root",
@@ -146,11 +155,20 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--nfm-epochs", type=int, default=2000)
     parser.add_argument("--kge-batch-size", type=int, default=1024)
     parser.add_argument("--batch-size", type=int, default=20000, help="NFM batch size.")
-    parser.add_argument("--embedding-dim", type=int, default=400, help="PyKEEN DistMult entity dimension.")
+    parser.add_argument("--kge-model", choices=["distmult", "compgcn"], default="distmult")
+    parser.add_argument("--embedding-dim", type=int, default=400, help="PyKEEN entity embedding dimension.")
     parser.add_argument("--nfm-sparse-embedding-dim", type=int, default=50)
     parser.add_argument("--protein-pca-components", type=int, default=100)
     parser.add_argument("--kge-lr", type=float, default=1e-3)
     parser.add_argument("--kge-num-negs", type=int, default=1)
+    parser.add_argument("--compgcn-layers", type=int, default=1, help="Number of CompGCN message-passing layers.")
+    parser.add_argument("--compgcn-dropout", type=float, default=0.0, help="Dropout inside each CompGCN layer.")
+    parser.add_argument(
+        "--compgcn-composition",
+        choices=["sub", "mult", "corr"],
+        default="mult",
+        help="CompGCN entity-relation composition: sub, mult, or corr.",
+    )
     parser.add_argument("--nfm-lr", type=float, default=1e-3)
     parser.add_argument("--nfm-weight-decay", type=float, default=1e-5)
     parser.add_argument("--nfm-dropout", type=float, default=0.0)

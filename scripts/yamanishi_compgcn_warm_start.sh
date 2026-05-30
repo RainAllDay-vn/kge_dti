@@ -9,6 +9,7 @@ export HF_DATASETS_CACHE="./.cache"
 split="warm_start_1_10"
 dataset="yamanishi_08"
 data_root="${DATA_ROOT:-/kaggle/input/datasets/ngcaovn/kge-dti/data}"
+model=compgcn
 
 python src/kge_nfm.py \
   --dataset "$dataset" \
@@ -17,7 +18,7 @@ python src/kge_nfm.py \
   --split "$split" \
   --folds 10 \
   --device auto \
-  --kge-model compgcn \
+  --kge-model $model \
   --embedding-dim 400 \
   --kge-epochs 50 \
   --kge-batch-size 8192 \

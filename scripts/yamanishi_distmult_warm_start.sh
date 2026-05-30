@@ -12,7 +12,7 @@ python src/kge_nfm.py \
   --output-dir ./output/kge_nfm_$split \
   --data-root /kaggle/input/datasets/ngcaovn/kge-dti/data \
   --split $split \
-  --model $model \
+  --kge-model $model \
   --folds 10 \
   --device auto \
   --embedding-dim 400 \

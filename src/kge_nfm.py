@@ -38,7 +38,8 @@ def run_fold(
     tail_encoder: dict[str, int],
     device: str,
 ) -> dict[str, float]:
-    print(f"Fold {fold} ({args.kge_model})")
+    fold_number = fold + 1
+    print(f"Fold {fold_number} ({args.split}, {args.kge_model})")
     train, test = load_fold(spec, fold)
     train_pos = train.loc[train["label"] == 1, TRIPLE_COLUMNS]
     kge_train = pd.concat([train_pos, kg], ignore_index=True)[TRIPLE_COLUMNS].astype(str)
@@ -133,6 +134,11 @@ def run_fold(
     print(f"roc_auc_nfm: {roc_nfm_value:.6f}")
     print(f"pr_auc_nfm: {pr_nfm_value:.6f}")
     return {
+        "fold": fold_number,
+        "train_size": len(train),
+        "test_size": len(test),
+        "train_pos": int((train["label"] == 1).sum()),
+        "test_pos": int((test["label"] == 1).sum()),
         "roc_auc": roc_value,
         "pr_auc": pr_value,
         "roc_auc_nfm": roc_nfm_value,
@@ -148,7 +154,11 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Directory containing dataset folders. Defaults to <repo>/data.",
     )
-    parser.add_argument("--split", default="warm_start_1_10", help="Fold split directory name.")
+    parser.add_argument(
+        "--split",
+        default="warm_start_1_10",
+        help="Fold split directory under data_folds, e.g. warm_start_1_10, protein_coldstart, drug_coldstart.",
+    )
     parser.add_argument("--folds", type=int, default=10, help="Number of folds to run from fold 0.")
     parser.add_argument("--device", default="auto", help="auto, cpu, cuda, cuda:0, ...")
     parser.add_argument("--kge-epochs", type=int, default=50)
@@ -216,6 +226,8 @@ def main() -> None:
 
     stable_metrics = pd.DataFrame(metrics_by_fold)
     print(stable_metrics)
+    print("Average metrics:")
+    print(stable_metrics[["roc_auc", "pr_auc", "roc_auc_nfm", "pr_auc_nfm"]].mean())
     print(stable_metrics.describe())
     stable_metrics.to_csv(output_root / "auc" / "kge_nfm_torch_auc.csv", index=False)
 

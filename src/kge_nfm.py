@@ -27,6 +27,16 @@ from nfm import train_nfm
 from utils import ensure_output_dirs, parse_hidden_units, resolve_device, set_seed
 
 
+def print_args(args: argparse.Namespace, data_root: Path, device: str) -> None:
+    config = vars(args).copy()
+    config["resolved_data_root"] = str(data_root)
+    config["resolved_device"] = device
+
+    print("Run arguments:")
+    for key in sorted(config):
+        print(f"  {key}: {config[key]}")
+
+
 def run_fold(
     fold: int,
     args: argparse.Namespace,
@@ -199,6 +209,7 @@ def main() -> None:
     device = resolve_device(args.device)
     output_root = Path(args.output_dir)
     ensure_output_dirs(output_root)
+    print_args(args, data_root, device)
 
     spec = get_dataset_spec(data_root, args.dataset, args.split)
     all_dti = load_all_dti(spec)

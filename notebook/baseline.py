@@ -21,6 +21,7 @@ with app.setup:
     import pandas as pd
     import numpy as np
     import matplotlib.pyplot as plt
+    import pickle
 
     from sklearn.ensemble import RandomForestClassifier
     from sklearn import metrics
@@ -64,7 +65,9 @@ def _():
 def _():
     # Set global variables
     dataset_root = Path("./data/yamanishi_08")
-    return (dataset_root,)
+    models_dir = Path("./models")
+    models_dir.mkdir(parents=True, exist_ok=True)
+    return (dataset_root, models_dir)
 
 
 @app.cell
@@ -568,9 +571,9 @@ def _():
     ### Dataset Reconstruction & Model Input Format
     We construct a balanced or realistically ratioed tabular dataset where **each row in the DataFrame represents a single drug-target pair prediction instance**:
     - **Positive Instances (`label = 1.0`)**: 5,128 verified interactions loaded from `dt_all_08.txt`.
-    - **Negative Instances (`label = 0.0`)**: 46,152 programmatically sampled unobserved pairs (maintaining a realistic **1:9 positive-to-negative ratio**).
-    - **Final Features DataFrame (`X`)**: A `pd.DataFrame` of shape `(51280, 1171)` containing concatenated drug Morgan fingerprints (1024 cols) and scaled target CTD descriptors (147 cols).
-    - **Target Series (`y`)**: A `pd.Series` of shape `(51280,)` with binary labels.
+    - **Negative Instances (`label = 0.0`)**: 51,280 programmatically sampled unobserved pairs (maintaining a realistic **1:10 positive-to-negative ratio**).
+    - **Final Features DataFrame (`X`)**: A `pd.DataFrame` of shape `(56408, 1171)` containing concatenated drug Morgan fingerprints (1024 cols) and scaled target CTD descriptors (147 cols).
+    - **Target Series (`y`)**: A `pd.Series` of shape `(56408,)` with binary labels.
     """)
     return
 
@@ -584,9 +587,9 @@ def _(drug_struc_df, dti_df, pro_seq_df):
     _all_drugs = list(drug_struc_df["drug_id"].unique())
     _all_targets = list(pro_seq_df["pro_id"].unique())
 
-    # 3. Programmatic negative sampling (1:9 ratio)
+    # 3. Programmatic negative sampling (1:10 ratio)
     _num_positives = len(_pos_pairs)
-    _num_negatives = _num_positives * 9
+    _num_negatives = _num_positives * 10
 
     _neg_pairs_set = set()
     while len(_neg_pairs_set) < _num_negatives:
@@ -672,16 +675,23 @@ def _(drug_fps, drug_struc_df, pro_ctds, pro_seq_df, warm_data_df):
 
 
 @app.cell
-def _(warm_X_train, warm_y_train):
-    # 1. Initialize and train the Random Forest Classifier
-    warm_random_forest_clf = RandomForestClassifier(
-        n_estimators=200,
-        criterion='entropy',
-        class_weight='balanced',
-        random_state=42,
-        n_jobs=-1
-    )
-    warm_random_forest_clf.fit(warm_X_train, warm_y_train)
+def _(warm_X_train, warm_y_train, models_dir):
+    _model_path = models_dir / "warm_random_forest_clf.pkl"
+    if _model_path.exists():
+        with open(_model_path, "rb") as _f:
+            warm_random_forest_clf = pickle.load(_f)
+    else:
+        # 1. Initialize and train the Random Forest Classifier
+        warm_random_forest_clf = RandomForestClassifier(
+            n_estimators=200,
+            criterion='entropy',
+            class_weight='balanced',
+            random_state=42,
+            n_jobs=-1
+        )
+        warm_random_forest_clf.fit(warm_X_train, warm_y_train)
+        with open(_model_path, "wb") as _f:
+            pickle.dump(warm_random_forest_clf, _f)
 
     mo.md("")
     return (warm_random_forest_clf,)
@@ -749,7 +759,7 @@ def _(warm_X_test, warm_random_forest_clf, warm_y_test):
 
         1. **Outstanding Baseline Performance**:
             *   **ROC-AUC (${warm_roc_auc:.4f}$):** Demonstrates excellent discriminative ability between interacting and non-interacting drug-target pairs across all classification thresholds.
-            *   **PR-AUC (${warm_pr_auc:.4f}$):** Since the dataset is highly imbalanced ($1:9$ positive-to-negative ratio), the Precision-Recall AUC is a much more robust and honest indicator of performance. Achieving an ${warm_pr_auc:.4f}$ PR-AUC indicates the model maintains high precision (low false-positive rate) even at high recall thresholds.
+            *   **PR-AUC (${warm_pr_auc:.4f}$):** Since the dataset is highly imbalanced ($1:10$ positive-to-negative ratio), the Precision-Recall AUC is a much more robust and honest indicator of performance. Achieving an ${warm_pr_auc:.4f}$ PR-AUC indicates the model maintains high precision (low false-positive rate) even at high recall thresholds.
 
         2. **Why is the baseline so strong?**
             *   **Highly Informative Features:** Circular Morgan fingerprints represent local chemical neighborhoods that directly dictate binding affinity, while 147-dimensional CTD descriptors represent global physical/chemical signatures of target proteins.
@@ -773,7 +783,7 @@ def _():
 
     In the **Drug Cold-Start** setting, we evaluate the baseline model's ability to extrapolate to entirely novel chemical compounds that were not present in the training set.
 
-    This simulates the real-world scenario of screening a newly developed compound library against a set of known target proteins. To achieve a true cold-start partition, we split our unique drug compounds into **80% training drugs** and **20% testing drugs**, ensuring their sets are completely disjoint. Negative pairs are programmatically sampled (1:9 ratio) within each drug set to avoid any information leakage.
+    This simulates the real-world scenario of screening a newly developed compound library against a set of known target proteins. To achieve a true cold-start partition, we split our unique drug compounds into **80% training drugs** and **20% testing drugs**, ensuring their sets are completely disjoint. Negative pairs are programmatically sampled (1:10 ratio) within each drug set to avoid any information leakage.
     """)
     return
 
@@ -794,8 +804,8 @@ def _(ctd_df, drug_struc_df, dti_df, fp_df, pro_seq_df):
     _train_pos = [p for p in _pos_pairs if p[0] in _train_drugs]
     _test_pos = [p for p in _pos_pairs if p[0] in _test_drugs]
 
-    # 2. Sample disjoint negatives (1:9 ratio)
-    _num_train_neg = len(_train_pos) * 9
+    # 2. Sample disjoint negatives (1:10 ratio)
+    _num_train_neg = len(_train_pos) * 10
     _train_neg_set = set()
     while len(_train_neg_set) < _num_train_neg:
         _drug = random.choice(list(_train_drugs))
@@ -804,7 +814,7 @@ def _(ctd_df, drug_struc_df, dti_df, fp_df, pro_seq_df):
         if _pair not in _pos_pairs and _pair not in _train_neg_set:
             _train_neg_set.add(_pair)
 
-    _num_test_neg = len(_test_pos) * 9
+    _num_test_neg = len(_test_pos) * 10
     _test_neg_set = set()
     while len(_test_neg_set) < _num_test_neg:
         _drug = random.choice(list(_test_drugs))
@@ -845,16 +855,23 @@ def _(ctd_df, drug_struc_df, dti_df, fp_df, pro_seq_df):
 
 
 @app.cell
-def _(cold_drug_X_train, cold_drug_y_train):
-    # 1. Train the baseline model on Train Drugs
-    cold_drug_random_forest_clf = RandomForestClassifier(
-        n_estimators=200,
-        criterion="entropy",
-        class_weight="balanced",
-        random_state=42,
-        n_jobs=-1,
-    )
-    cold_drug_random_forest_clf.fit(cold_drug_X_train, cold_drug_y_train)
+def _(cold_drug_X_train, cold_drug_y_train, models_dir):
+    _model_path = models_dir / "cold_drug_random_forest_clf.pkl"
+    if _model_path.exists():
+        with open(_model_path, "rb") as _f:
+            cold_drug_random_forest_clf = pickle.load(_f)
+    else:
+        # 1. Train the baseline model on Train Drugs
+        cold_drug_random_forest_clf = RandomForestClassifier(
+            n_estimators=200,
+            criterion="entropy",
+            class_weight="balanced",
+            random_state=42,
+            n_jobs=-1,
+        )
+        cold_drug_random_forest_clf.fit(cold_drug_X_train, cold_drug_y_train)
+        with open(_model_path, "wb") as _f:
+            pickle.dump(cold_drug_random_forest_clf, _f)
     mo.md('')
     return (cold_drug_random_forest_clf,)
 
@@ -943,7 +960,7 @@ def _():
 
     In the **Protein Cold-Start** setting, we evaluate the baseline model's ability to extrapolate to entirely novel target proteins that were not present in the training set.
 
-    This simulates the real-world scenario of predicting candidate compounds for a newly characterized biological receptor or disease target protein. We partition our unique target proteins into **80% training proteins** and **20% testing proteins**. Negative pairs are programmatically sampled (1:9 ratio) within each protein target partition to prevent information leakage.
+    This simulates the real-world scenario of predicting candidate compounds for a newly characterized biological receptor or disease target protein. We partition our unique target proteins into **80% training proteins** and **20% testing proteins**. Negative pairs are programmatically sampled (1:10 ratio) within each protein target partition to prevent information leakage.
     """)
     return
 
@@ -964,8 +981,8 @@ def _(ctd_df, drug_struc_df, dti_df, fp_df, pro_seq_df):
     _train_pos_pro = [p for p in _pos_pairs if p[1] in _train_targets]
     _test_pos_pro = [p for p in _pos_pairs if p[1] in _test_targets]
 
-    # 2. Sample disjoint negatives (1:9 ratio)
-    _num_train_neg_pro = len(_train_pos_pro) * 9
+    # 2. Sample disjoint negatives (1:10 ratio)
+    _num_train_neg_pro = len(_train_pos_pro) * 10
     _train_neg_set_pro = set()
     while len(_train_neg_set_pro) < _num_train_neg_pro:
         _drug = random.choice(_all_drugs)
@@ -974,7 +991,7 @@ def _(ctd_df, drug_struc_df, dti_df, fp_df, pro_seq_df):
         if _pair not in _pos_pairs and _pair not in _train_neg_set_pro:
             _train_neg_set_pro.add(_pair)
 
-    _num_test_neg_pro = len(_test_pos_pro) * 9
+    _num_test_neg_pro = len(_test_pos_pro) * 10
     _test_neg_set_pro = set()
     while len(_test_neg_set_pro) < _num_test_neg_pro:
         _drug = random.choice(_all_drugs)
@@ -1015,16 +1032,23 @@ def _(ctd_df, drug_struc_df, dti_df, fp_df, pro_seq_df):
 
 
 @app.cell
-def _(cold_protein_X_train, cold_protein_y_train):
-    # 1. Train the baseline model on Train Proteins
-    cold_protein_random_forest_clf = RandomForestClassifier(
-        n_estimators=200,
-        criterion="entropy",
-        class_weight="balanced",
-        random_state=42,
-        n_jobs=-1,
-    )
-    cold_protein_random_forest_clf.fit(cold_protein_X_train, cold_protein_y_train)
+def _(cold_protein_X_train, cold_protein_y_train, models_dir):
+    _model_path = models_dir / "cold_protein_random_forest_clf.pkl"
+    if _model_path.exists():
+        with open(_model_path, "rb") as _f:
+            cold_protein_random_forest_clf = pickle.load(_f)
+    else:
+        # 1. Train the baseline model on Train Proteins
+        cold_protein_random_forest_clf = RandomForestClassifier(
+            n_estimators=200,
+            criterion="entropy",
+            class_weight="balanced",
+            random_state=42,
+            n_jobs=-1,
+        )
+        cold_protein_random_forest_clf.fit(cold_protein_X_train, cold_protein_y_train)
+        with open(_model_path, "wb") as _f:
+            pickle.dump(cold_protein_random_forest_clf, _f)
     mo.md('')
     return (cold_protein_random_forest_clf,)
 

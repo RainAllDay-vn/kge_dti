@@ -26,28 +26,14 @@ with app.setup:
 
     from sklearn.ensemble import RandomForestClassifier
     from xgboost import XGBClassifier
+    from sklearn.neighbors import KNeighborsClassifier
+    from sklearn.linear_model import LogisticRegression
     from sklearn import metrics
 
     random.seed(42)
 
 
 @app.cell(hide_code=True)
-def _():
-    mo.md(r"""
-    # Drug-Target Interaction (DTI) Prediction
-    ### Dataset Exploration & Baseline Establishment
-
-    Predicting interactions between drugs and target proteins is a crucial step in modern *in silico* drug discovery. This notebook serves as an interactive environment to inspect data quality and establish a model baseline.
-
-    ## Core Notebook Goals:
-
-    - **Explore the Dataset:** Investigate DTI interaction networks, Morgan drug structure fingerprints, protein sequence CTD descriptors, and Knowledge Graph relation triples within the `data/yamanishi_08` directory.
-    - **Establish a Baseline:** Construct and validate a robust Random Forest classifier baseline to predict drug-target interactions across cross-validation splits.
-    """)
-    return
-
-
-@app.cell
 def _():
     mo.md(r"""
     # Drug-Target Interaction (DTI) Prediction
@@ -73,6 +59,80 @@ def _():
 
 
 @app.cell
+def _(ctd_df, dataset_root, fp_df, models_dir):
+    def evaluate_baseline_cv(model_class, model_kwargs, prefix):
+        results = {}
+        splits = ["warm_start_1_10", "warm_start_1_1", "protein_coldstart", "drug_coldstart"]
+
+        for split in splits:
+            cv_metrics_path = models_dir / f"baseline_cv_metrics_{prefix}_{split}.pkl"
+
+            if cv_metrics_path.exists():
+                with open(cv_metrics_path, "rb") as f:
+                    results[split] = pickle.load(f)
+            else:
+                # Also check joint pickle if it exists and contains the prefix key
+                joint_path = models_dir / f"baseline_cv_metrics_{split}.pkl"
+                if joint_path.exists():
+                    with open(joint_path, "rb") as f:
+                        data = pickle.load(f)
+                        if isinstance(data, dict) and prefix in data:
+                            results[split] = data[prefix]
+                            continue
+                        elif isinstance(data, dict) and prefix in ["rf", "xgb"] and "roc_auc" in data:
+                            results[split] = data
+                            continue
+
+                results[split] = {"roc_auc": [], "pr_auc": []}
+
+                # Load and train over 10 folds
+                for fold in range(10):
+                    train_path = dataset_root / "data_folds" / split / f"train_fold_{fold + 1}.csv"
+                    test_path = dataset_root / "data_folds" / split / f"test_fold_{fold + 1}.csv"
+
+                    train_df = pd.read_csv(train_path)
+                    test_df = pd.read_csv(test_path)
+
+                    def prepare_fold_features(df):
+                        merged = pd.merge(df, fp_df, how="left", left_on="head", right_on="drug_id")
+                        merged = pd.merge(merged, ctd_df, how="left", left_on="tail", right_on="pro_id")
+                        X = merged.drop(columns=["head", "relation", "tail", "label", "drug_id", "pro_id", "pred"], errors="ignore")
+                        y = merged["label"]
+                        return X, y
+
+                    X_train, y_train = prepare_fold_features(train_df)
+                    X_test, y_test = prepare_fold_features(test_df)
+
+                    # Dynamic kwargs copy to avoid mutating the original
+                    current_kwargs = model_kwargs.copy()
+                    if model_class.__name__ == "XGBClassifier":
+                        num_pos = (y_train == 1.0).sum()
+                        num_neg = (y_train == 0.0).sum()
+                        ratio = num_neg / num_pos if num_pos > 0 else 1.0
+                        current_kwargs["scale_pos_weight"] = ratio
+
+                    model = model_class(**current_kwargs)
+                    model.fit(X_train, y_train)
+                    probs = model.predict_proba(X_test)[:, 1]
+
+                    fpr, tpr, _ = metrics.roc_curve(y_test, probs)
+                    roc_auc = metrics.auc(fpr, tpr)
+
+                    prec, rec, _ = metrics.precision_recall_curve(y_test, probs)
+                    pr_auc = metrics.auc(rec, prec)
+
+                    results[split]["roc_auc"].append(roc_auc)
+                    results[split]["pr_auc"].append(pr_auc)
+
+                with open(cv_metrics_path, "wb") as f:
+                    pickle.dump(results[split], f)
+
+        return results
+
+    return (evaluate_baseline_cv,)
+
+
+@app.cell
 def _():
     mo.md(r"""
     ## 1. Visualizing Dataset Shapes and Structures
@@ -85,7 +145,7 @@ def _():
 @app.cell
 def _():
     mo.md(r"""
-    ### 1.1 Drug-Target Interactions (`dt_all_08.txt`)
+    ### 1.1 Drug-Target Interactions
 
     This file defines the gold-standard bipartite drug-target interaction (DTI) network from the Yamanishi 08 benchmark dataset.
 
@@ -107,6 +167,14 @@ def _(dataset_root):
         names=["drug_id", "relation", "target_id"]
     )
     return (dti_df,)
+
+
+@app.cell
+def _():
+    mo.md(r"""
+    #### DTI Dataset Summary Statistics
+    """)
+    return
 
 
 @app.cell
@@ -144,12 +212,19 @@ def _(dti_df):
             ]
         })
 
-        return mo.vstack([
-            mo.md("### DTI Dataset Summary Statistics"),
-            stats_df
-        ])
+        return stats_df
 
     _display_stats()
+    return
+
+
+@app.cell
+def _():
+    mo.md(r"""
+    #### 1.1.1 Degree Distributions & DTI Network Sparsity
+
+    To understand the connectivity landscape, we analyze the degree distribution of the bipartite DTI network. The degree of a drug represents the number of target proteins it is known to interact with, while the degree of a protein represents the number of active drugs targeting it.
+    """)
     return
 
 
@@ -189,27 +264,34 @@ def _(dti_df):
         plot_ui = mo.as_html(fig)
         plt.close(fig)
 
-        return mo.vstack([
-            mo.md(r"""
-            ### 1.1.1 Degree Distributions & DTI Network Sparsity
-
-            To understand the connectivity landscape, we analyze the degree distribution of the bipartite DTI network. The degree of a drug represents the number of target proteins it is known to interact with, while the degree of a protein represents the number of active drugs targeting it.
-            """),
-            plot_ui,
-            mo.md(r"""
-            #### **Key Insights & Structural Observations:**
-
-            1. **Low-Degree Node Domination (High Sparsity)**:
-                - **Drugs**: Nearly **74.6% of all drugs** (590 out of 791) have a degree of 5 or fewer, meaning the vast majority of drugs are associated with very few targets.
-                - **Targets**: More than **54.6% of all target proteins** (540 out of 989) interact with 2 or fewer drugs.
-            2. **Power-Law/Scale-Free Characteristics**:
-                - Both distributions exhibit a heavy-tailed decay. A tiny group of highly connected "hub" nodes (e.g., a few drugs targeting over 100 proteins) hold the network together, while most nodes have very sparse connections.
-            3. **Interaction Matrix Density ($0.655\%$)**:
-                - Out of $782,301$ possible bipartite edges ($791 \text{ drugs} \times 989 \text{ targets}$), only **5,128** are active. This extreme sparsity ($99.345\%$ empty space) presents a classic sparse matrix completion challenge for downstream DTI machine learning models.
-            """)
-        ])
+        return plot_ui
 
     _display_degree_stats()
+    return
+
+
+@app.cell
+def _():
+    mo.md(r"""
+    ##### **Key Insights & Structural Observations:**
+
+    1. **Low-Degree Node Domination (High Sparsity)**:
+        - **Drugs**: Nearly **74.6% of all drugs** (590 out of 791) have a degree of 5 or fewer, meaning the vast majority of drugs are associated with very few targets.
+        - **Targets**: More than **54.6% of all target proteins** (540 out of 989) interact with 2 or fewer drugs.
+    2. **Power-Law/Scale-Free Characteristics**:
+        - Both distributions exhibit a heavy-tailed decay. A tiny group of highly connected "hub" nodes (e.g., a few drugs targeting over 100 proteins) hold the network together, while most nodes have very sparse connections.
+    3. **Interaction Matrix Density ($0.655\%$)**:
+        - Out of $782,301$ possible bipartite edges ($791 \text{ drugs} \times 989 \text{ targets}$), only **5,128** are active. This extreme sparsity ($99.345\%$ empty space) presents a classic sparse matrix completion challenge for downstream DTI machine learning models.
+    """)
+    return
+
+
+@app.cell
+def _():
+    mo.md(r"""
+    #### DTI Network Hub Identification
+    Below are the most interactive entities (hubs) in the DTI network:
+    """)
     return
 
 
@@ -224,13 +306,7 @@ def _(dti_df):
 
         hub_view = mo.hstack([top_drugs_table, top_targets_table], justify="space-around")
 
-        return mo.vstack([
-            mo.md(r"""
-            ### DTI Network Hub Identification
-            Below are the most interactive entities (hubs) in the DTI network:
-            """),
-            hub_view
-        ])
+        return hub_view
 
     _display_hub_view()
     return
@@ -254,6 +330,14 @@ def _(dataset_root):
     drug_struc_df = pd.read_csv(dataset_root / "791drug_struc.csv")
     drug_fps = np.loadtxt(dataset_root / "morganfp.txt", delimiter=",")
     return drug_fps, drug_struc_df
+
+
+@app.cell
+def _():
+    mo.md(r"""
+    #### Drug Structure & Fingerprint Summary Statistics
+    """)
+    return
 
 
 @app.cell
@@ -294,16 +378,25 @@ def _(drug_fps, drug_struc_df):
             ]
         })
 
-        table_preview = mo.ui.table(drug_struc_df_with_len.head(10), label="Preview of Drug Structures (Top 10)")
-
-        return mo.vstack([
-            mo.md("#### **Drug Structure & Fingerprint Summary Statistics**"),
-            stats_df,
-            mo.md("#### **Interactive Chemical Structures Preview**"),
-            table_preview
-        ])
+        return stats_df
 
     _display_drug_stats()
+    return
+
+
+@app.cell
+def _():
+    mo.md(r"""
+    #### Interactive Chemical Structures Preview
+    """)
+    return
+
+
+@app.cell
+def _(drug_struc_df):
+    _df = drug_struc_df.copy()
+    _df["smiles_length"] = _df["smiles"].apply(len)
+    mo.ui.table(_df.head(10), label="Preview of Drug Structures (Top 10)")
     return
 
 
@@ -326,6 +419,14 @@ def _(dataset_root):
     pro_seq_df.columns = ["pro_id", "pro_ids", "seq"]
     pro_ctds = np.loadtxt(dataset_root / "pro_ctd.txt", delimiter=",")
     return pro_ctds, pro_seq_df
+
+
+@app.cell
+def _():
+    mo.md(r"""
+    #### Protein Sequence & CTD Descriptor Summary Statistics
+    """)
+    return
 
 
 @app.cell
@@ -357,16 +458,25 @@ def _(pro_ctds, pro_seq_df):
             ]
         })
 
-        table_preview = mo.ui.table(pro_seq_df_with_len[["pro_id", "seq", "seq_length"]].head(10), label="Preview of Protein Sequences (Top 10)")
-
-        return mo.vstack([
-            mo.md("#### **Protein Sequence & CTD Descriptor Summary Statistics**"),
-            stats_df,
-            mo.md("#### **Interactive Sequence Preview**"),
-            table_preview
-        ])
+        return stats_df
 
     _display_protein_stats()
+    return
+
+
+@app.cell
+def _():
+    mo.md(r"""
+    #### Interactive Sequence Preview
+    """)
+    return
+
+
+@app.cell
+def _(pro_seq_df):
+    _df = pro_seq_df.copy()
+    _df["seq_length"] = _df["seq"].apply(len)
+    mo.ui.table(_df[["pro_id", "seq", "seq_length"]].head(10), label="Preview of Protein Sequences (Top 10)")
     return
 
 
@@ -437,6 +547,14 @@ def _(dataset_root):
 
 
 @app.cell
+def _():
+    mo.md(r"""
+    #### Knowledge Graph Summary Statistics & DTI Coverage
+    """)
+    return
+
+
+@app.cell
 def _(combined_kg, dti_df, kegg_kg, uniprot_kg):
     def _display_kg_stats():
         total_triples = len(combined_kg)
@@ -480,16 +598,32 @@ def _(combined_kg, dti_df, kegg_kg, uniprot_kg):
             ]
         })
 
-        table_preview = mo.ui.table(combined_kg.head(10), label="Preview of Background KG Triples (Top 10)")
-
-        return mo.vstack([
-            mo.md("#### **Knowledge Graph Summary Statistics & DTI Coverage**"),
-            stats_df,
-            mo.md("#### **Interactive Knowledge Graph Triples Preview**"),
-            table_preview
-        ])
+        return stats_df
 
     _display_kg_stats()
+    return
+
+
+@app.cell
+def _():
+    mo.md(r"""
+    #### Interactive Knowledge Graph Triples Preview
+    """)
+    return
+
+
+@app.cell
+def _(combined_kg):
+    table_preview = mo.ui.table(combined_kg.head(10), label="Preview of Background KG Triples (Top 10)")
+    table_preview
+    return
+
+
+@app.cell
+def _():
+    mo.md(r"""
+    #### Knowledge Graph Connectivity & Topology
+    """)
     return
 
 
@@ -534,26 +668,41 @@ def _(combined_kg):
         plot_ui = mo.as_html(fig)
         plt.close(fig)
 
-        # Top Hubs identification
-        top_hubs = node_degrees.head(10).reset_index()
-        top_hubs.columns = ["Entity ID", "Degree (KG Connections)"]
-        hubs_table = mo.ui.table(top_hubs, label="Top 10 KG Entity Hubs")
+        return plot_ui
 
-        return mo.vstack([
-            mo.md("#### **Knowledge Graph Connectivity & Topology**"),
-            plot_ui,
-            mo.md("#### **KG Hub Identification**"),
-            hubs_table,
-            mo.md(r"""
-            #### **KG Structural Observations & ML Implications:**
-            1. **Scale-Free Network Topology**:
-               - The entity connectivity degree histogram (log-scale) shows that while most nodes have very low degrees (1 or 2 connections), a small number of hub nodes have several thousand connections. This is a classic scale-free network.
-            2. **High DTI Entity Coverage**:
-               - Over **99% of drugs** and **98% of target proteins** from the gold-standard interactions (`dt_all_08.txt`) are present in the combined background KG. This is crucial because it ensures that downstream KGE training (e.g. DistMult) will generate dense vector representations for almost all drug-target candidate pairs.
-            """)
-        ])
+    plot_ui = _display_kg_plots()
+    plot_ui
+    return
 
-    _display_kg_plots()
+
+@app.cell
+def _():
+    mo.md(r"""
+    #### KG Hub Identification
+    """)
+    return
+
+
+@app.cell
+def _(combined_kg):
+    node_degrees = pd.concat([combined_kg["head"], combined_kg["tail"]]).value_counts()
+    top_hubs = node_degrees.head(10).reset_index()
+    top_hubs.columns = ["Entity ID", "Degree (KG Connections)"]
+    hubs_table = mo.ui.table(top_hubs, label="Top 10 KG Entity Hubs")
+    hubs_table
+    return
+
+
+@app.cell
+def _():
+    mo.md(r"""
+    ##### **KG Structural Observations & ML Implications:**
+
+    1. **Scale-Free Network Topology**:
+       - The entity connectivity degree histogram (log-scale) shows that while most nodes have very low degrees (1 or 2 connections), a small number of hub nodes have several thousand connections. This is a classic scale-free network.
+    2. **High DTI Entity Coverage**:
+       - Over **99% of drugs** and **98% of target proteins** from the gold-standard interactions (`dt_all_08.txt`) are present in the combined background KG. This is crucial because it ensures that downstream KGE training (e.g. DistMult) will generate dense vector representations for almost all drug-target candidate pairs.
+    """)
     return
 
 
@@ -579,7 +728,183 @@ def _(drug_fps, drug_struc_df, pro_ctds, pro_seq_df):
 @app.cell(hide_code=True)
 def _():
     mo.md(r"""
-    # 2. Random Forest Baseline
+    ## 2. KNN Baseline Model
+
+    In this section, we evaluate the **KNN Classifier** baseline across four dataset partitions:
+    - **Warm-Start 1:10 Split:** Bipartite random split with 1:10 positive-to-negative ratio.
+    - **Warm-Start 1:1 Split:** Bipartite random split with 1:1 positive-to-negative ratio.
+    - **Protein Cold-Start Split:** Predicting on novel, unseen target proteins.
+    - **Drug Cold-Start Split:** Predicting on novel, unseen drug structures.
+
+    We utilize the ready-made 10-fold cross-validation folds in `data/yamanishi_08/data_folds/` to train and evaluate the models.
+    """)
+    return
+
+
+@app.cell
+def _(evaluate_baseline_cv):
+    cv_results_knn = evaluate_baseline_cv(
+        KNeighborsClassifier,
+        {"n_neighbors": 5, "n_jobs": -1},
+        "knn"
+    )
+    return (cv_results_knn,)
+
+
+@app.cell
+def _():
+    mo.md(r"""
+    ### 2.1 Cross-Validation Results
+    """)
+    return
+
+
+@app.cell
+def _(cv_results_knn):
+    _splits = ["warm_start_1_10", "warm_start_1_1", "protein_coldstart", "drug_coldstart"]
+    _split_labels = ["Warm-Start 1:10", "Warm-Start 1:1", "Protein Cold-Start", "Drug Cold-Start"]
+
+    _rows = []
+    for _s, _label in zip(_splits, _split_labels):
+        _roc_mean = np.mean(cv_results_knn[_s]["roc_auc"])
+        _roc_std = np.std(cv_results_knn[_s]["roc_auc"])
+        _pr_mean = np.mean(cv_results_knn[_s]["pr_auc"])
+        _pr_std = np.std(cv_results_knn[_s]["pr_auc"])
+        _rows.append({
+            "Evaluation Split": _label,
+            "Mean ROC-AUC": f"{_roc_mean:.4f} (± {_roc_std:.4f})",
+            "Mean PR-AUC": f"{_pr_mean:.4f} (± {_pr_std:.4f})"
+        })
+
+    _df = pd.DataFrame(_rows)
+
+    plt.rcParams["figure.facecolor"] = "none"
+    plt.rcParams["axes.facecolor"] = "none"
+    plt.rcParams["text.color"] = "#E2E8F0"
+    plt.rcParams["axes.labelcolor"] = "#94A3B8"
+    plt.rcParams["xtick.color"] = "#94A3B8"
+    plt.rcParams["ytick.color"] = "#94A3B8"
+    plt.rcParams["grid.color"] = "#334155"
+    plt.rcParams["axes.edgecolor"] = "#475569"
+
+    _fig, _axes = plt.subplots(1, 2, figsize=(14, 5))
+
+    _knn_roc_data = [cv_results_knn[s]["roc_auc"] for s in _splits]
+    _knn_pr_data = [cv_results_knn[s]["pr_auc"] for s in _splits]
+
+    _axes[0].boxplot(_knn_roc_data, labels=_split_labels)
+    _axes[0].set_title("KNN ROC-AUC", fontsize=11, fontweight="bold", pad=12, color="#F1F5F9")
+    _axes[0].set_ylabel("ROC-AUC Score", fontsize=10)
+    _axes[0].grid(True, linestyle="--", alpha=0.3)
+
+    _axes[1].boxplot(_knn_pr_data, labels=_split_labels)
+    _axes[1].set_title("KNN PR-AUC", fontsize=11, fontweight="bold", pad=12, color="#F1F5F9")
+    _axes[1].set_ylabel("PR-AUC Score", fontsize=10)
+    _axes[1].grid(True, linestyle="--", alpha=0.3)
+
+    plt.tight_layout()
+    _plot = mo.as_html(_fig)
+    plt.close(_fig)
+
+    mo.vstack([
+        _df,
+        _plot
+    ])
+    return
+
+
+@app.cell(hide_code=True)
+def _():
+    mo.md(r"""
+    ## 3. Logistic Regression Baseline Model
+
+    In this section, we evaluate the **Logistic Regression** baseline across four dataset partitions:
+    - **Warm-Start 1:10 Split:** Bipartite random split with 1:10 positive-to-negative ratio.
+    - **Warm-Start 1:1 Split:** Bipartite random split with 1:1 positive-to-negative ratio.
+    - **Protein Cold-Start Split:** Predicting on novel, unseen target proteins.
+    - **Drug Cold-Start Split:** Predicting on novel, unseen drug structures.
+
+    We utilize the ready-made 10-fold cross-validation folds in `data/yamanishi_08/data_folds/` to train and evaluate the models.
+    """)
+    return
+
+
+@app.cell
+def _(evaluate_baseline_cv):
+    cv_results_lr = evaluate_baseline_cv(
+        LogisticRegression,
+        {"max_iter": 1000, "class_weight": "balanced", "random_state": 42},
+        "lr"
+    )
+    return (cv_results_lr,)
+
+
+@app.cell
+def _():
+    mo.md(r"""
+    ### 3.1 Cross-Validation Results
+    """)
+    return
+
+
+@app.cell
+def _(cv_results_lr):
+    _splits = ["warm_start_1_10", "warm_start_1_1", "protein_coldstart", "drug_coldstart"]
+    _split_labels = ["Warm-Start 1:10", "Warm-Start 1:1", "Protein Cold-Start", "Drug Cold-Start"]
+
+    _rows = []
+    for _s, _label in zip(_splits, _split_labels):
+        _roc_mean = np.mean(cv_results_lr[_s]["roc_auc"])
+        _roc_std = np.std(cv_results_lr[_s]["roc_auc"])
+        _pr_mean = np.mean(cv_results_lr[_s]["pr_auc"])
+        _pr_std = np.std(cv_results_lr[_s]["pr_auc"])
+        _rows.append({
+            "Evaluation Split": _label,
+            "Mean ROC-AUC": f"{_roc_mean:.4f} (± {_roc_std:.4f})",
+            "Mean PR-AUC": f"{_pr_mean:.4f} (± {_pr_std:.4f})"
+        })
+
+    _df = pd.DataFrame(_rows)
+
+    plt.rcParams["figure.facecolor"] = "none"
+    plt.rcParams["axes.facecolor"] = "none"
+    plt.rcParams["text.color"] = "#E2E8F0"
+    plt.rcParams["axes.labelcolor"] = "#94A3B8"
+    plt.rcParams["xtick.color"] = "#94A3B8"
+    plt.rcParams["ytick.color"] = "#94A3B8"
+    plt.rcParams["grid.color"] = "#334155"
+    plt.rcParams["axes.edgecolor"] = "#475569"
+
+    _fig, _axes = plt.subplots(1, 2, figsize=(14, 5))
+
+    _lr_roc_data = [cv_results_lr[s]["roc_auc"] for s in _splits]
+    _lr_pr_data = [cv_results_lr[s]["pr_auc"] for s in _splits]
+
+    _axes[0].boxplot(_lr_roc_data, labels=_split_labels)
+    _axes[0].set_title("Logistic Regression ROC-AUC", fontsize=11, fontweight="bold", pad=12, color="#F1F5F9")
+    _axes[0].set_ylabel("ROC-AUC Score", fontsize=10)
+    _axes[0].grid(True, linestyle="--", alpha=0.3)
+
+    _axes[1].boxplot(_lr_pr_data, labels=_split_labels)
+    _axes[1].set_title("Logistic Regression PR-AUC", fontsize=11, fontweight="bold", pad=12, color="#F1F5F9")
+    _axes[1].set_ylabel("PR-AUC Score", fontsize=10)
+    _axes[1].grid(True, linestyle="--", alpha=0.3)
+
+    plt.tight_layout()
+    _plot = mo.as_html(_fig)
+    plt.close(_fig)
+
+    mo.vstack([
+        _df,
+        _plot
+    ])
+    return
+
+
+@app.cell(hide_code=True)
+def _():
+    mo.md(r"""
+    ## 4. Random Forest Baseline Model
 
     In this section, we evaluate the **Random Forest Classifier** baseline across four dataset partitions:
     - **Warm-Start 1:10 Split:** Bipartite random split with 1:10 positive-to-negative ratio.
@@ -593,76 +918,27 @@ def _():
 
 
 @app.cell
-def _(ctd_df, dataset_root, fp_df, models_dir):
-    cv_results_rf = {}
-    _splits = ["warm_start_1_10", "warm_start_1_1", "protein_coldstart", "drug_coldstart"]
-
-    for _split in _splits:
-        _cv_metrics_path = models_dir / f"baseline_cv_metrics_rf_{_split}.pkl"
-
-        if _cv_metrics_path.exists():
-            with open(_cv_metrics_path, "rb") as _f:
-                cv_results_rf[_split] = pickle.load(_f)
-        else:
-            # Also check joint pickle if it exists
-            _joint_path = models_dir / f"baseline_cv_metrics_{_split}.pkl"
-            if _joint_path.exists():
-                with open(_joint_path, "rb") as _f:
-                    _data = pickle.load(_f)
-                    if isinstance(_data, dict) and "rf" in _data:
-                        cv_results_rf[_split] = _data["rf"]
-                        continue
-                    elif isinstance(_data, dict) and "roc_auc" in _data:
-                        cv_results_rf[_split] = _data
-                        continue
-
-            cv_results_rf[_split] = {"roc_auc": [], "pr_auc": []}
-
-            # Load and train over 10 folds
-            for _fold in range(10):
-                # 1. Read files
-                _train_path = dataset_root / "data_folds" / _split / f"train_fold_{_fold + 1}.csv"
-                _test_path = dataset_root / "data_folds" / _split / f"test_fold_{_fold + 1}.csv"
-
-                _train_df = pd.read_csv(_train_path)
-                _test_df = pd.read_csv(_test_path)
-
-                # 2. Merge features
-                def _prepare_fold_features(df):
-                    _merged = pd.merge(df, fp_df, how="left", left_on="head", right_on="drug_id")
-                    _merged = pd.merge(_merged, ctd_df, how="left", left_on="tail", right_on="pro_id")
-                    _X = _merged.drop(columns=["head", "relation", "tail", "label", "drug_id", "pro_id", "pred"], errors="ignore")
-                    _y = _merged["label"]
-                    return _X, _y
-
-                _X_train, _y_train = _prepare_fold_features(_train_df)
-                _X_test, _y_test = _prepare_fold_features(_test_df)
-
-                # 3. Train and evaluate Random Forest
-                _rf = RandomForestClassifier(
-                    n_estimators=200,
-                    criterion='entropy',
-                    class_weight='balanced',
-                    random_state=42,
-                    n_jobs=-1
-                )
-                _rf.fit(_X_train, _y_train)
-                _rf_probs = _rf.predict_proba(_X_test)[:, 1]
-
-                _rf_fpr, _rf_tpr, _ = metrics.roc_curve(_y_test, _rf_probs)
-                _rf_roc_auc = metrics.auc(_rf_fpr, _rf_tpr)
-
-                _rf_prec, _rf_rec, _ = metrics.precision_recall_curve(_y_test, _rf_probs)
-                _rf_pr_auc = metrics.auc(_rf_rec, _rf_prec)
-
-                cv_results_rf[_split]["roc_auc"].append(_rf_roc_auc)
-                cv_results_rf[_split]["pr_auc"].append(_rf_pr_auc)
-
-            with open(_cv_metrics_path, "wb") as _f:
-                pickle.dump(cv_results_rf[_split], _f)
-
-    mo.md("10-Fold Cross-Validation training and evaluation for Random Forest completed successfully!")
+def _(evaluate_baseline_cv):
+    cv_results_rf = evaluate_baseline_cv(
+        RandomForestClassifier,
+        {
+            "n_estimators": 200,
+            "criterion": "entropy",
+            "class_weight": "balanced",
+            "random_state": 42,
+            "n_jobs": -1
+        },
+        "rf"
+    )
     return (cv_results_rf,)
+
+
+@app.cell
+def _():
+    mo.md(r"""
+    ### 4.1 Cross-Validation Results
+    """)
+    return
 
 
 @app.cell
@@ -713,7 +989,6 @@ def _(cv_results_rf):
     plt.close(_fig)
 
     mo.vstack([
-        mo.md("### Random Forest 10-Fold CV Results across Splits"),
         _df,
         _plot
     ])
@@ -723,7 +998,7 @@ def _(cv_results_rf):
 @app.cell(hide_code=True)
 def _():
     mo.md(r"""
-    # 3. XGBoost Baseline
+    ## 5. XGBoost Baseline Model
 
     In this section, we evaluate the **XGBoost Classifier** baseline across four dataset partitions:
     - **Warm-Start 1:10 Split:** Bipartite random split with 1:10 positive-to-negative ratio.
@@ -737,82 +1012,27 @@ def _():
 
 
 @app.cell
-def _(ctd_df, dataset_root, fp_df, models_dir):
-    cv_results_xgb = {}
-    _splits = ["warm_start_1_10", "warm_start_1_1", "protein_coldstart", "drug_coldstart"]
-
-    for _split in _splits:
-        _cv_metrics_path = models_dir / f"baseline_cv_metrics_xgb_{_split}.pkl"
-
-        if _cv_metrics_path.exists():
-            with open(_cv_metrics_path, "rb") as _f:
-                cv_results_xgb[_split] = pickle.load(_f)
-        else:
-            # Also check joint pickle if it exists
-            _joint_path = models_dir / f"baseline_cv_metrics_{_split}.pkl"
-            if _joint_path.exists():
-                with open(_joint_path, "rb") as _f:
-                    _data = pickle.load(_f)
-                    if isinstance(_data, dict) and "xgb" in _data:
-                        cv_results_xgb[_split] = _data["xgb"]
-                        continue
-                    elif isinstance(_data, dict) and "roc_auc" in _data:
-                        cv_results_xgb[_split] = _data
-                        continue
-
-            cv_results_xgb[_split] = {"roc_auc": [], "pr_auc": []}
-
-            # Load and train over 10 folds
-            for _fold in range(10):
-                # 1. Read files
-                _train_path = dataset_root / "data_folds" / _split / f"train_fold_{_fold + 1}.csv"
-                _test_path = dataset_root / "data_folds" / _split / f"test_fold_{_fold + 1}.csv"
-
-                _train_df = pd.read_csv(_train_path)
-                _test_df = pd.read_csv(_test_path)
-
-                # 2. Merge features
-                def _prepare_fold_features(df):
-                    _merged = pd.merge(df, fp_df, how="left", left_on="head", right_on="drug_id")
-                    _merged = pd.merge(_merged, ctd_df, how="left", left_on="tail", right_on="pro_id")
-                    _X = _merged.drop(columns=["head", "relation", "tail", "label", "drug_id", "pro_id", "pred"], errors="ignore")
-                    _y = _merged["label"]
-                    return _X, _y
-
-                _X_train, _y_train = _prepare_fold_features(_train_df)
-                _X_test, _y_test = _prepare_fold_features(_test_df)
-
-                # Calculate class ratio dynamically for scale_pos_weight
-                _num_pos = (_y_train == 1.0).sum()
-                _num_neg = (_y_train == 0.0).sum()
-                _ratio = _num_neg / _num_pos if _num_pos > 0 else 1.0
-
-                # 3. Train and evaluate XGBoost
-                _xgb = XGBClassifier(
-                    n_estimators=200,
-                    learning_rate=0.05,
-                    scale_pos_weight=_ratio,
-                    tree_method="hist",
-                    random_state=42,
-                    n_jobs=-1
-                )
-                _xgb.fit(_X_train, _y_train)
-                _xgb_probs = _xgb.predict_proba(_X_test)[:, 1]
-
-                _xgb_fpr, _xgb_tpr, _ = metrics.roc_curve(_y_test, _xgb_probs)
-                _xgb_roc_auc = metrics.auc(_xgb_fpr, _xgb_tpr)
-
-                _xgb_prec, _xgb_rec, _ = metrics.precision_recall_curve(_y_test, _xgb_probs)
-                _xgb_pr_auc = metrics.auc(_xgb_rec, _xgb_prec)
-
-                cv_results_xgb[_split]["roc_auc"].append(_xgb_roc_auc)
-                cv_results_xgb[_split]["pr_auc"].append(_xgb_pr_auc)
-
-            with open(_cv_metrics_path, "wb") as _f:
-                pickle.dump(cv_results_xgb[_split], _f)
-
-    mo.md("10-Fold Cross-Validation training and evaluation for XGBoost completed successfully!")
+def _(evaluate_baseline_cv):
+    cv_results_xgb = evaluate_baseline_cv(
+        XGBClassifier,
+        {
+            "n_estimators": 200,
+            "learning_rate": 0.05,
+            "tree_method": "hist",
+            "random_state": 42,
+            "n_jobs": -1
+        },
+        "xgb"
+    )
     return (cv_results_xgb,)
+
+
+@app.cell
+def _():
+    mo.md(r"""
+    ### 5.1 Cross-Validation Results
+    """)
+    return
 
 
 @app.cell
@@ -863,7 +1083,6 @@ def _(cv_results_xgb):
     plt.close(_fig)
 
     mo.vstack([
-        mo.md("### XGBoost 10-Fold CV Results across Splits"),
         _df,
         _plot
     ])
@@ -873,7 +1092,7 @@ def _(cv_results_xgb):
 @app.cell(hide_code=True)
 def _():
     mo.md(r"""
-    # 4. Conclusion: Model Comparison & Generalisation Analysis
+    ## 6. Model Comparison & Conclusion
 
     In this section, we compare **Random Forest** and **XGBoost** side-by-side across all four cross-validation configurations to determine generalisation patterns, strengths, and bottlenecks.
     """)
@@ -881,7 +1100,15 @@ def _():
 
 
 @app.cell
-def _(cv_results_rf, cv_results_xgb):
+def _():
+    mo.md(r"""
+    ### 6.1 Performance Comparison across Splits
+    """)
+    return
+
+
+@app.cell
+def _(cv_results_knn, cv_results_lr, cv_results_rf, cv_results_xgb):
     # Styling matplotlib for dark/sleek theme
     plt.rcParams["figure.facecolor"] = "none"
     plt.rcParams["axes.facecolor"] = "none"
@@ -892,13 +1119,15 @@ def _(cv_results_rf, cv_results_xgb):
     plt.rcParams["grid.color"] = "#334155"
     plt.rcParams["axes.edgecolor"] = "#475569"
 
-    _fig, _axes = plt.subplots(1, 2, figsize=(16, 6))
+    _fig, _axes = plt.subplots(1, 2, figsize=(18, 7))
 
     _splits = ["warm_start_1_10", "warm_start_1_1", "protein_coldstart", "drug_coldstart"]
     _split_labels = ["Warm-Start 1:10", "Warm-Start 1:1", "Protein Cold-Start", "Drug Cold-Start"]
 
-    _positions_rf = [1, 4, 7, 10]
-    _positions_xgb = [2, 5, 8, 11]
+    _positions_knn = [1, 6, 11, 16]
+    _positions_lr = [2, 7, 12, 17]
+    _positions_rf = [3, 8, 13, 18]
+    _positions_xgb = [4, 9, 14, 19]
 
     # Customise box plots
     def _style_boxplots(bp, color):
@@ -914,45 +1143,61 @@ def _(cv_results_rf, cv_results_xgb):
             flier.set(marker='o', color='#ef4444', alpha=0.8)
 
     # 1. ROC-AUC Grouped Boxplot
+    _knn_roc_data = [cv_results_knn[s]["roc_auc"] for s in _splits]
+    _lr_roc_data = [cv_results_lr[s]["roc_auc"] for s in _splits]
     _rf_roc_data = [cv_results_rf[s]["roc_auc"] for s in _splits]
     _xgb_roc_data = [cv_results_xgb[s]["roc_auc"] for s in _splits]
 
-    _bp_rf_roc = _axes[0].boxplot(_rf_roc_data, positions=_positions_rf, widths=0.6, patch_artist=False)
-    _bp_xgb_roc = _axes[0].boxplot(_xgb_roc_data, positions=_positions_xgb, widths=0.6, patch_artist=False)
+    _bp_knn_roc = _axes[0].boxplot(_knn_roc_data, positions=_positions_knn, widths=0.4, patch_artist=False)
+    _bp_lr_roc = _axes[0].boxplot(_lr_roc_data, positions=_positions_lr, widths=0.4, patch_artist=False)
+    _bp_rf_roc = _axes[0].boxplot(_rf_roc_data, positions=_positions_rf, widths=0.4, patch_artist=False)
+    _bp_xgb_roc = _axes[0].boxplot(_xgb_roc_data, positions=_positions_xgb, widths=0.4, patch_artist=False)
 
-    _style_boxplots(_bp_rf_roc, "#a78bfa")  # Purple for RF
+    _style_boxplots(_bp_knn_roc, "#eab308")  # Yellow for KNN
+    _style_boxplots(_bp_lr_roc, "#10b981")   # Green for LR
+    _style_boxplots(_bp_rf_roc, "#a78bfa")   # Purple for RF
     _style_boxplots(_bp_xgb_roc, "#3b82f6")  # Blue for XGBoost
 
     _axes[0].set_title("10-Fold CV ROC-AUC across Splits", fontsize=12, fontweight="bold", pad=15, color="#F1F5F9")
-    _axes[0].set_xticks([1.5, 4.5, 7.5, 10.5])
+    _axes[0].set_xticks([2.5, 7.5, 12.5, 17.5])
     _axes[0].set_xticklabels(_split_labels, rotation=15)
     _axes[0].set_ylabel("ROC-AUC Score", fontsize=10)
     _axes[0].grid(True, linestyle="--", alpha=0.3)
 
     from matplotlib.lines import Line2D
     _legend_elements = [
+        Line2D([0], [0], color='#eab308', lw=2.5, label='KNN'),
+        Line2D([0], [0], color='#10b981', lw=2.5, label='Logistic Regression'),
         Line2D([0], [0], color='#a78bfa', lw=2.5, label='Random Forest'),
         Line2D([0], [0], color='#3b82f6', lw=2.5, label='XGBoost')
     ]
     _axes[0].legend(handles=_legend_elements, facecolor="#1e293b", edgecolor="#475569")
 
     # 2. PR-AUC Grouped Boxplot
+    _knn_pr_data = [cv_results_knn[s]["pr_auc"] for s in _splits]
+    _lr_pr_data = [cv_results_lr[s]["pr_auc"] for s in _splits]
     _rf_pr_data = [cv_results_rf[s]["pr_auc"] for s in _splits]
     _xgb_pr_data = [cv_results_xgb[s]["pr_auc"] for s in _splits]
 
-    _bp_rf_pr = _axes[1].boxplot(_rf_pr_data, positions=_positions_rf, widths=0.6, patch_artist=False)
-    _bp_xgb_pr = _axes[1].boxplot(_xgb_pr_data, positions=_positions_xgb, widths=0.6, patch_artist=False)
+    _bp_knn_pr = _axes[1].boxplot(_knn_pr_data, positions=_positions_knn, widths=0.4, patch_artist=False)
+    _bp_lr_pr = _axes[1].boxplot(_lr_pr_data, positions=_positions_lr, widths=0.4, patch_artist=False)
+    _bp_rf_pr = _axes[1].boxplot(_rf_pr_data, positions=_positions_rf, widths=0.4, patch_artist=False)
+    _bp_xgb_pr = _axes[1].boxplot(_xgb_pr_data, positions=_positions_xgb, widths=0.4, patch_artist=False)
 
-    _style_boxplots(_bp_rf_pr, "#ec4899")  # Pink for RF
+    _style_boxplots(_bp_knn_pr, "#f59e0b")  # Orange for KNN
+    _style_boxplots(_bp_lr_pr, "#059669")   # Dark Green for LR
+    _style_boxplots(_bp_rf_pr, "#ec4899")   # Pink for RF
     _style_boxplots(_bp_xgb_pr, "#06b6d4")  # Cyan for XGBoost
 
     _axes[1].set_title("10-Fold CV PR-AUC across Splits", fontsize=12, fontweight="bold", pad=15, color="#F1F5F9")
-    _axes[1].set_xticks([1.5, 4.5, 7.5, 10.5])
+    _axes[1].set_xticks([2.5, 7.5, 12.5, 17.5])
     _axes[1].set_xticklabels(_split_labels, rotation=15)
     _axes[1].set_ylabel("PR-AUC Score", fontsize=10)
     _axes[1].grid(True, linestyle="--", alpha=0.3)
 
     _legend_elements_pr = [
+        Line2D([0], [0], color='#f59e0b', lw=2.5, label='KNN'),
+        Line2D([0], [0], color='#059669', lw=2.5, label='Logistic Regression'),
         Line2D([0], [0], color='#ec4899', lw=2.5, label='Random Forest'),
         Line2D([0], [0], color='#06b6d4', lw=2.5, label='XGBoost')
     ]
@@ -961,21 +1206,35 @@ def _(cv_results_rf, cv_results_xgb):
     plt.tight_layout()
     _cv_plot = mo.as_html(_fig)
     plt.close(_fig)
-
-    mo.vstack([
-        mo.md("### Grouped Multi-Split Cross-Validation Performance Comparison"),
-        _cv_plot
-    ])
+    _cv_plot
     return
 
 
 @app.cell
-def _(cv_results_rf, cv_results_xgb):
+def _():
+    mo.md(r"""
+    ### 6.2 All Models Performance Summary
+    """)
+    return
+
+
+@app.cell
+def _(cv_results_knn, cv_results_lr, cv_results_rf, cv_results_xgb):
     _splits = ["warm_start_1_10", "warm_start_1_1", "protein_coldstart", "drug_coldstart"]
     _split_names = ["Warm-Start (1:10)", "Warm-Start (1:1)", "Protein Cold-Start", "Drug Cold-Start"]
 
     _rows = []
     for _s, _name in zip(_splits, _split_names):
+        _knn_roc_mean = np.mean(cv_results_knn[_s]["roc_auc"])
+        _knn_roc_std = np.std(cv_results_knn[_s]["roc_auc"])
+        _knn_pr_mean = np.mean(cv_results_knn[_s]["pr_auc"])
+        _knn_pr_std = np.std(cv_results_knn[_s]["pr_auc"])
+
+        _lr_roc_mean = np.mean(cv_results_lr[_s]["roc_auc"])
+        _lr_roc_std = np.std(cv_results_lr[_s]["roc_auc"])
+        _lr_pr_mean = np.mean(cv_results_lr[_s]["pr_auc"])
+        _lr_pr_std = np.std(cv_results_lr[_s]["pr_auc"])
+
         _rf_roc_mean = np.mean(cv_results_rf[_s]["roc_auc"])
         _rf_roc_std = np.std(cv_results_rf[_s]["roc_auc"])
         _rf_pr_mean = np.mean(cv_results_rf[_s]["pr_auc"])
@@ -988,35 +1247,41 @@ def _(cv_results_rf, cv_results_xgb):
 
         _rows.append({
             "Evaluation Split": _name,
+            "KNN Mean ROC-AUC": f"{_knn_roc_mean:.4f} (± {_knn_roc_std:.4f})",
+            "LR Mean ROC-AUC": f"{_lr_roc_mean:.4f} (± {_lr_roc_std:.4f})",
             "RF Mean ROC-AUC": f"{_rf_roc_mean:.4f} (± {_rf_roc_std:.4f})",
             "XGB Mean ROC-AUC": f"{_xgb_roc_mean:.4f} (± {_xgb_roc_std:.4f})",
+            "KNN Mean PR-AUC": f"{_knn_pr_mean:.4f} (± {_knn_pr_std:.4f})",
+            "LR Mean PR-AUC": f"{_lr_pr_mean:.4f} (± {_lr_pr_std:.4f})",
             "RF Mean PR-AUC": f"{_rf_pr_mean:.4f} (± {_rf_pr_std:.4f})",
             "XGB Mean PR-AUC": f"{_xgb_pr_mean:.4f} (± {_xgb_pr_std:.4f})"
         })
 
     _comparison_df = pd.DataFrame(_rows)
-    _cv_summary_md = mo.md("""
-    ### 10-Fold CV Grouped Results Interpretation & Statistical Insights
+    _comparison_df
+    return
 
-    Evaluating our ensembles across multiple split conditions provides several fundamental insights:
+
+@app.cell
+def _():
+    mo.md(r"""
+    ### 6.3 10-Fold CV Grouped Results Interpretation & Statistical Insights
+
+    Evaluating our ensembles across multiple split conditions and algorithms provides several fundamental insights:
 
     **1. Warm-Start Ratio Sensitivity (1:10 vs 1:1):**
-    - Under the **Warm-Start 1:10** setting, both models achieve excellent ROC-AUC ($\\approx 0.948$) and high PR-AUC ($\\approx 0.814$).
-    - When switched to the balanced **Warm-Start 1:1** split, performance increases significantly with mean ROC-AUC rising to $\\approx 0.975$ and mean PR-AUC exceeding **0.97**. This occurs because the balanced positive-to-negative ratio significantly simplifies the search space and avoids negative class dominance, highlighting the impact of class imbalance in bipartite prediction.
+    - Under the **Warm-Start 1:10** setting, tree-based models and KNN achieve excellent results, while linear Logistic Regression performs reasonably but slightly lower due to structural linearity constraints.
+    - When switched to the balanced **Warm-Start 1:1** split, performance increases significantly across all models, with tree ensembles exceeding **0.97** PR-AUC and KNN/LR showing marked improvements.
 
     **2. The Generalisation Gradients (Warm vs. Cold Starts):**
-    - **Protein Cold-Start**: Performance is remarkably robust (Mean ROC-AUC $\\approx 0.902$, PR-AUC $\\approx 0.725$). This confirms that sequence-level target protein CTD descriptors generalize successfully to entirely unseen protein families due to conserved global physicochemical patterns.
-    - **Drug Cold-Start**: Performance collapses severely (Mean ROC-AUC $\\approx 0.835$, PR-AUC $\\approx 0.530$). This shows that localized 2D Morgan fingerprints are highly sensitive to scaffold novelty. When evaluating entirely unseen chemical neighborhoods, baseline trees are forced to extrapolate to out-of-distribution feature spaces.
+    - **Protein Cold-Start**: Performance is remarkably robust for almost all models (with XGBoost and Random Forest leading). Sequence-level target protein CTD descriptors generalize successfully to entirely unseen protein families due to conserved global physicochemical patterns.
+    - **Drug Cold-Start**: Performance collapses severely for all models, highlighting that localized 2D Morgan fingerprints are highly sensitive to scaffold novelty. Unseen drug structures produce out-of-distribution feature spaces where distance-based KNN and linear models struggle to extrapolate.
 
-    **3. GBDTs vs. Random Forests:**
-    - Across **all splits**, XGBoost consistently outperforms Random Forest in both mean ROC-AUC and mean PR-AUC.
-    - The boost in performance is particularly evident in the difficult **Drug Cold-Start** partition, proving that gradient boosting is highly capable of regularizing decision boundaries on high-dimensional, sparse chemical representations.
+    **3. Model Capability Gradients (KNN vs. LR vs. RF vs. GBDTs):**
+    - **XGBoost & Random Forest**: Consistently dominate across all splits in both ROC-AUC and PR-AUC. This confirms that tree-based ensembles are highly capable of capturing complex non-linear combinations of molecular bits and continuous sequence features.
+    - **KNN**: Performs well on warm-start splits but shows sensitivity in cold-start configurations due to high-dimensional distance sparsity (curse of dimensionality on 1171 features).
+    - **Logistic Regression**: Serves as a solid baseline but is limited by linear decision boundaries, confirming the necessity of complex tree structures or non-linear graph embeddings.
     """)
-    mo.vstack([
-        mo.md("### Random Forest vs. XGBoost Performance Comparison"),
-        _comparison_df,
-        _cv_summary_md
-    ])
     return
 
 

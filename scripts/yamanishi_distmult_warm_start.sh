@@ -4,7 +4,7 @@ export HF_HOME= ./.cache
 export HF_DATASETS_CACHE= ./.cache
 
 
-split="warm_start_1_10"
+split="warm_start_1_1"
 dataset="yamanishi_08"
 model=distmult
 python src/kge_nfm.py \
